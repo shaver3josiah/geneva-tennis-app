@@ -22,7 +22,7 @@ email the file from their own account.
 - How to set it up and use it: [docs/START-HERE.md](docs/START-HERE.md)
 - What it measures, how, and the research behind it: [docs/RESEARCH.md](docs/RESEARCH.md)
 - The data contract between the tracker, the app and the sheet: [docs/MATCH-DATA.md](docs/MATCH-DATA.md)
-- The tracker page itself opens in any browser: .
+- The tracker page itself opens in any browser: `scripts/worksheets/match-tracker.html`.
   Use **Watch the demo match** to run the whole pipeline on a simulated match.
 
 ---
