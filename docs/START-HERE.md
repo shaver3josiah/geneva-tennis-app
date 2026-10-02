@@ -42,9 +42,9 @@ Updates install over the top of the previous version.
 
 ## First run
 
-1. **Coach.** Create an account and open the confirmation email. On the "waiting for an
-   invite" screen, tap **I'm a coach** and enter the coach code. An assistant coach does the
-   same with the same code.
+1. **Coach.** Create an account and open the confirmation email. On the **Nearly there**
+   screen, tap **I’m a coach** and enter the coach code. An assistant coach does the same
+   with the same code.
 2. **Roster.** On the **You** tab, select **Add or manage players**. For a college player,
    enter only the player's name and email and leave the guardian fields blank: an 18+ player
    manages their own consent. A player then signs up with that same email.
