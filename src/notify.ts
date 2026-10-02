@@ -64,7 +64,7 @@ export async function syncReminders(state: RewardState, on: boolean, now = new D
         name: 'Training streaks',
         importance: Notifications.AndroidImportance.DEFAULT,
         vibrationPattern: [0, 200],
-        lightColor: '#B8964F',
+        lightColor: '#C99A2C',
       });
     }
 

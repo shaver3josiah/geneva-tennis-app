@@ -12,8 +12,8 @@ export const color = {
   inkLift: '#1C1C20',
   inkHover: '#232329',
 
-  gold: '#B8964F',
-  goldHot: '#E0BF72',
+  gold: '#C99A2C',
+  goldHot: '#DAAF48',
   goldDeep: '#5E4A1F',
   /** Geneva College's official old gold. A brand reference; it is only 3.4:1 to 4.3:1
    *  on the dark surfaces, so it never carries small text here. */
@@ -33,8 +33,8 @@ export const color = {
   win: '#46D68C',
 
   lineDark: 'rgba(255,255,255,0.10)',
-  goldTint: 'rgba(184,150,79,0.10)',
-  goldLine: 'rgba(184,150,79,0.40)',
+  goldTint: 'rgba(201,154,44,0.10)',
+  goldLine: 'rgba(201,154,44,0.40)',
   blueTint: 'rgba(98,176,232,0.12)',
   blueLine: 'rgba(98,176,232,0.5)',
 
