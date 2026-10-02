@@ -10,6 +10,21 @@ Players are college athletes, so almost everyone is an adult who manages their o
 and consent. The original parent-monitoring model for a player under 18 is still here, intact,
 for the rare first-year who is one.
 
+## The match tracker
+
+A phone on the back fence (arm's reach above head height, ~3 m behind the baseline, 0.5x lens,
+landscape) follows both players and the ball. It keeps the score in college format, measures
+ball pace, net clearance, topspin, racket speed and depth, and reads body shape (legs, load,
+trunk turn). It raises trend alerts with body-shape clips. The coach's sheet updates every 3
+points or at the end of each game, with Excel, CSV and Google Sheets export. A student can
+email the file from their own account.
+
+- How to set it up and use it: [docs/START-HERE.md](docs/START-HERE.md)
+- What it measures, how, and the research behind it: [docs/RESEARCH.md](docs/RESEARCH.md)
+- The data contract between the tracker, the app and the sheet: [docs/MATCH-DATA.md](docs/MATCH-DATA.md)
+- The tracker page itself opens in any browser: .
+  Use **Watch the demo match** to run the whole pipeline on a simulated match.
+
 ---
 
 ## The roles

@@ -162,7 +162,7 @@ const T_ADULT = 'thread_coach_jordan';
 const T_TEEN = 'thread_coach_riley';
 const T_PARENT = 'thread_coach_parent';
 
-// The team's coach code, for THIS emulator only. Its SHA-256 is what config/coachCode holds
+// The team's coach code, for THIS emulator only. Its SHA-256 names the coachKeys document
 // and what the rules compare a claim against. A real project sets its own, long and random,
 // with `npm run set-coach-code`.
 const COACH_CODE = 'GENEVA-DEMO';
@@ -287,7 +287,8 @@ await commit([
   [`coaches/${COACH}`, { name: 'Coach Morgan', email: 'coach@genevatennis.test', createdAt: daysAgo(10) }],
   // The lowercase SHA-256 of the coach code, which the rules compare a claim against. Sign
   // up a new account in the app and claim coach access with GENEVA-DEMO to try the flow.
-  ['config/coachCode', { sha256: CODE_SHA256 }],
+  // The key the app's claim must name: a document called by the code's digest.
+  [`coachKeys/${CODE_SHA256}`, { createdAt: 1 }],
   [
     `athletes/${ADULT}`,
     {
@@ -414,8 +415,8 @@ if (!('consentGrantedAt' in adult.fields)) fail('the adult player has no consent
 if (adult.fields.guardianUid?.stringValue !== adult.fields.playerUid?.stringValue) {
   fail('the adult record does not hold one uid in both slots');
 }
-const stored = (await call(`${DOCS}/config/coachCode`)).fields?.sha256?.stringValue;
-if (stored !== CODE_SHA256) fail('config/coachCode does not hold the sha256 of the demo code');
+const keyDoc = await call(`${DOCS}/coachKeys/${CODE_SHA256}`);
+if (!keyDoc?.name) fail('coachKeys/<digest of the demo code> was not written');
 
 // Every workflow must carry a cadence. Without one the app treats it as 'once', so a
 // weekly match evaluation would overwrite last week's instead of filing a new one — the
