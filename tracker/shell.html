@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0B0B0D">
+<title>Geneva Tennis Match Tracker</title>
+<!--
+  Geneva Tennis · Match Tracker. One file, no build step at runtime, no server.
+
+  A phone on the back fence (arm's reach above head height, about 3 m behind the baseline,
+  0.5x ultra-wide lens) watches the whole singles court. Two pose models run side by side,
+  one on the full frame for the near player and one on an up-scaled crop of the far half
+  for the far player, so the two people never share a detector and never swap identities.
+  A frame-difference ball tracker follows the ball; each flight between a hit and a bounce
+  is fitted with a drag + Magnus physics model through the court calibration to estimate
+  pace, net clearance and topspin. A tennis scoring engine keeps the score, the charter
+  confirms or fixes each point with one tap, and the coach's sheet updates every 3 points.
+
+  Open-source pieces: Google MediaPipe Pose Landmarker (Apache-2.0). Ball-tracking approach
+  after TrackNet / WASB style candidate-then-trajectory pipelines, done here with classical
+  frame differencing so it runs in a phone browser. Physics after Cross & Lindsey,
+  Technical Tennis, and Goodwill et al. on tennis-ball aerodynamics.
+
+  Nothing is uploaded: video stays on the phone. What is kept is the point log, the shot
+  numbers, and joint coordinates for the body-shape clips.
+
+  BUILT by scripts/build-tracker.mjs from tracker/*.js and src/tennis/*.js. Edit those.
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&family=Oswald:wght@500;600;700&display=swap">
+<style>
+:root{
+  color-scheme:dark;
+  --night:#0B0B0D;--ink:#141416;--lift:#1C1C20;--hover:#232329;--input:#0F0F12;
+  --gold:#C99A2C;--gold-hot:#DAAF48;--gold-deep:#5E4A1F;--old-gold:#89734C;--gold-tint:rgba(201,154,44,.12);--gold-line:rgba(201,154,44,.45);
+  --blue:#62B0E8;--blue-tint:rgba(98,176,232,.13);--blue-line:rgba(98,176,232,.5);
+  --ball:#DDF54A;--ball-tint:rgba(221,245,74,.13);
+  --win:#46D68C;--danger:#FF5A5A;--amber:#FFC24D;
+  --bone:#FFFFFF;--chalk:#F4F1EA;--lede:#C9C9D2;--body:#B4B4C0;--dim:#9C9CA9;--faint:#82828F;
+  --line:rgba(255,255,255,.09);--line2:rgba(255,255,255,.16);
+  --display:'Oswald','Arial Narrow',Impact,sans-serif;--cond:'Barlow Condensed','Arial Narrow',sans-serif;--sans:'Barlow',system-ui,-apple-system,'Segoe UI',sans-serif;
+  --ease:cubic-bezier(.16,1,.3,1);
+  --safe-t:env(safe-area-inset-top,0px);--safe-b:env(safe-area-inset-bottom,0px);--safe-l:env(safe-area-inset-left,0px);--safe-r:env(safe-area-inset-right,0px);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:var(--night);color:var(--body);color-scheme:dark}
+body{font:15px/1.5 var(--sans);-webkit-text-size-adjust:100%;overflow:hidden}
+button,select,input,textarea{font:inherit;color:inherit}
+button{cursor:pointer;-webkit-tap-highlight-color:transparent;border:0;background:none}
+:focus-visible{outline:2px solid var(--gold-hot);outline-offset:2px}
+.num{font-family:var(--display);font-variant-numeric:tabular-nums;letter-spacing:.01em}
+.eyebrow{font:600 .68rem/1 var(--cond);letter-spacing:.16em;text-transform:uppercase;color:var(--faint)}
+[hidden]{display:none!important}
+
+/* ---------- layout: video stage + side panel; landscape phone = full-bleed stage */
+.app{display:grid;height:100%;grid-template-columns:minmax(0,1fr) 400px;grid-template-rows:auto minmax(0,1fr);
+  grid-template-areas:"top top" "stage side"}
+.top{grid-area:top;display:flex;align-items:center;gap:10px;padding:calc(8px + var(--safe-t)) calc(14px + var(--safe-r)) 8px calc(14px + var(--safe-l));
+  background:linear-gradient(180deg,#121214,#0d0d0f);border-bottom:1px solid var(--line)}
+.brand{display:flex;align-items:center;gap:10px;min-width:0}
+.brand svg{width:30px;height:30px;flex:none}
+.brand b{font:700 1.02rem/1 var(--display);letter-spacing:.06em;color:var(--chalk);text-transform:uppercase;white-space:nowrap}
+.brand small{display:block;font:600 .62rem/1.2 var(--cond);letter-spacing:.18em;color:var(--gold-hot);text-transform:uppercase}
+.top .grow{flex:1}
+.chip{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border-radius:99px;border:1px solid var(--line2);
+  font:600 .7rem/1 var(--cond);letter-spacing:.1em;text-transform:uppercase;color:var(--lede);white-space:nowrap;background:rgba(0,0,0,.25)}
+.chip i{width:7px;height:7px;border-radius:50%;background:var(--faint);flex:none}
+.chip.on i{background:var(--win);box-shadow:0 0 0 3px rgba(70,214,140,.18)}
+.chip.warn i{background:var(--amber)}
+.chip.bad i{background:var(--danger)}
+.chip.live i{background:var(--ball);animation:pulse 1.4s infinite}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(221,245,74,.55)}70%{box-shadow:0 0 0 8px rgba(221,245,74,0)}100%{box-shadow:0 0 0 0 rgba(221,245,74,0)}}
+.iconbtn{width:40px;height:40px;border-radius:12px;display:grid;place-items:center;border:1px solid var(--line2);color:var(--chalk);background:var(--ink)}
+.iconbtn:hover{background:var(--hover)}
+.iconbtn svg{width:20px;height:20px}
+
+.stage{grid-area:stage;position:relative;background:#050506;overflow:hidden;min-height:0}
+.stage canvas,.stage video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
+.stage video{opacity:0}
+.stage[data-src="camera"] video,.stage[data-src="video"] video{opacity:1}
+#view{z-index:1}#overlay{z-index:2;pointer-events:none}
+.side{grid-area:side;display:flex;flex-direction:column;min-height:0;background:var(--ink);border-left:1px solid var(--line)}
+
+/* ---------- scoreboard (over the stage, top-left) */
+.board{position:absolute;z-index:5;left:calc(12px + var(--safe-l));top:12px;display:grid;grid-template-columns:auto auto auto;
+  background:rgba(11,11,13,.86);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border:1px solid var(--line2);border-radius:12px;overflow:hidden;min-width:240px}
+.board .row{display:contents}
+.board .nm{display:flex;align-items:center;gap:8px;padding:7px 12px;font:600 .9rem/1.1 var(--cond);letter-spacing:.06em;text-transform:uppercase;color:var(--chalk);white-space:nowrap}
+.board .nm .sv{width:8px;height:8px;border-radius:50%;background:transparent;border:1px solid var(--faint)}
+.board .nm .sv.on{background:var(--ball);border-color:var(--ball)}
+.board .nm .end{font:600 .6rem/1 var(--cond);letter-spacing:.14em;padding:3px 5px;border-radius:4px;color:var(--night)}
+.board .nm .end.near{background:var(--gold)}.board .nm .end.far{background:var(--blue)}
+.board .sets{display:flex;gap:2px;padding:0 6px;align-items:center}
+.board .sets span{width:22px;text-align:center;font:600 1rem/1 var(--display);color:var(--dim)}
+.board .sets span.cur{color:var(--chalk)}
+.board .pts{min-width:52px;display:grid;place-items:center;font:700 1.05rem/1 var(--display);color:var(--night);background:var(--gold-hot);padding:0 10px}
+.board .row.r1 .nm,.board .row.r1 .sets,.board .row.r1 .pts{border-top:1px solid var(--line)}
+.board .sit{grid-column:1/-1;padding:4px 12px;font:700 .64rem/1.4 var(--cond);letter-spacing:.16em;text-transform:uppercase;color:var(--night);background:var(--ball)}
+
+/* ---------- stage chips and toasts */
+.hud{position:absolute;z-index:5;right:calc(12px + var(--safe-r));top:12px;display:flex;flex-direction:column;align-items:flex-end;gap:6px}
+.speed{position:absolute;z-index:5;right:calc(12px + var(--safe-r));bottom:calc(84px + var(--safe-b));text-align:right;pointer-events:none}
+.speed .v{font:700 2.6rem/1 var(--display);color:var(--chalk);text-shadow:0 2px 14px rgba(0,0,0,.6)}
+.speed .u{font:600 .7rem/1 var(--cond);letter-spacing:.16em;color:var(--gold-hot);text-transform:uppercase}
+.speed .s{font:500 .82rem/1.3 var(--sans);color:var(--lede);text-shadow:0 1px 8px rgba(0,0,0,.8)}
+.toast{position:absolute;z-index:8;left:50%;top:14px;transform:translate(-50%,-140%);transition:transform .45s var(--ease);
+  display:flex;align-items:center;gap:12px;padding:10px 12px 10px 16px;border-radius:14px;background:rgba(20,20,22,.95);border:1px solid var(--gold-line);
+  box-shadow:0 18px 50px rgba(0,0,0,.55);max-width:min(92%,560px)}
+.toast.show{transform:translate(-50%,0)}
+.toast .t1{font:700 .95rem/1.2 var(--cond);letter-spacing:.06em;text-transform:uppercase;color:var(--chalk)}
+.toast .t2{font-size:.82rem;color:var(--dim)}
+.toast .acts{display:flex;gap:6px;margin-left:6px}
+
+/* ---------- the charting pad, along the bottom of the stage */
+.pad{position:absolute;z-index:6;left:0;right:0;bottom:0;padding:10px calc(12px + var(--safe-r)) calc(10px + var(--safe-b)) calc(12px + var(--safe-l));
+  background:linear-gradient(0deg,rgba(11,11,13,.96) 60%,rgba(11,11,13,0));display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap}
+.pad .grp{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.pad .lbl{font:600 .62rem/1 var(--cond);letter-spacing:.16em;text-transform:uppercase;color:var(--faint);width:100%;margin-bottom:2px}
+.btn{min-height:44px;padding:0 16px;border-radius:12px;display:inline-flex;align-items:center;justify-content:center;gap:8px;
+  font:700 .82rem/1 var(--cond);letter-spacing:.1em;text-transform:uppercase;color:var(--chalk);background:var(--lift);border:1px solid var(--line2);transition:background .15s,transform .1s}
+.btn:hover{background:var(--hover)}
+.btn:active{transform:scale(.97)}
+.btn.gold{background:var(--gold);color:var(--night);border-color:transparent}
+.btn.gold:hover{background:var(--gold-hot)}
+.btn.ball{background:var(--ball);color:var(--night);border-color:transparent}
+.btn.us{border-color:var(--gold-line);background:var(--gold-tint)}
+.btn.them{border-color:var(--blue-line);background:var(--blue-tint)}
+.btn.bad{border-color:rgba(255,90,90,.5);background:rgba(255,90,90,.1)}
+.btn.sm{min-height:34px;padding:0 11px;font-size:.72rem;border-radius:9px}
+.btn.wide{flex:1}
+.btn[disabled]{opacity:.4;pointer-events:none}
+.btn svg{width:16px;height:16px}
+.sep{width:1px;align-self:stretch;background:var(--line2);margin:0 2px}
+
+/* ---------- side panel tabs */
+.tabs{display:flex;gap:2px;padding:8px 8px 0;border-bottom:1px solid var(--line);overflow-x:auto;scrollbar-width:none}
+.tabs::-webkit-scrollbar{display:none}
+.tab{flex:none;min-height:40px;padding:0 12px;font:700 .74rem/1 var(--cond);letter-spacing:.12em;text-transform:uppercase;color:var(--faint);border-bottom:2px solid transparent}
+.tab[aria-selected="true"]{color:var(--chalk);border-color:var(--gold)}
+.tab .n{display:inline-grid;place-items:center;min-width:18px;height:18px;margin-left:4px;border-radius:9px;background:var(--danger);color:var(--night);font-size:.66rem}
+.panes{flex:1;min-height:0;overflow:auto;padding:14px;-webkit-overflow-scrolling:touch}
+.pane{display:none}.pane.on{display:block}
+.card{background:var(--lift);border:1px solid var(--line);border-radius:14px;padding:12px 14px;margin-bottom:12px}
+.card h3{font:700 .8rem/1.2 var(--cond);letter-spacing:.14em;text-transform:uppercase;color:var(--chalk);margin-bottom:8px;display:flex;align-items:center;gap:8px}
+.card h3 small{margin-left:auto;font-weight:600;letter-spacing:.08em;color:var(--faint)}
+.cmp{width:100%;border-collapse:collapse;font-size:.86rem}
+.cmp th{font:600 .66rem/1 var(--cond);letter-spacing:.14em;text-transform:uppercase;color:var(--faint);text-align:right;padding:4px 2px 8px}
+.cmp th:first-child{text-align:left}
+.cmp td{padding:6px 2px;border-top:1px solid var(--line);text-align:right;font-variant-numeric:tabular-nums;color:var(--lede)}
+.cmp td:first-child{text-align:left;color:var(--dim)}
+.cmp td.best{color:var(--chalk);font-weight:600}
+.cmp tr.sec td{font:700 .66rem/1 var(--cond);letter-spacing:.16em;text-transform:uppercase;color:var(--gold-hot);padding-top:14px;border-top:0}
+.kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.kpi{background:var(--input);border:1px solid var(--line);border-radius:12px;padding:9px 10px}
+.kpi .k{font:600 .6rem/1 var(--cond);letter-spacing:.14em;text-transform:uppercase;color:var(--faint)}
+.kpi .v{font:700 1.45rem/1.1 var(--display);color:var(--chalk);margin-top:5px}
+.kpi .d{font-size:.72rem;color:var(--dim)}
+.kpi.us{border-color:var(--gold-line)}.kpi.them{border-color:var(--blue-line)}
+.legend{display:flex;gap:12px;font-size:.75rem;color:var(--dim);margin:6px 0}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px}
+canvas.mini{width:100%;display:block;border-radius:10px;background:#0f1a14}
+.alert{border-radius:14px;border:1px solid var(--line2);background:var(--lift);padding:12px 14px;margin-bottom:10px;position:relative}
+.alert.fix{border-color:rgba(255,90,90,.45)}.alert.watch{border-color:rgba(255,194,77,.45)}.alert.info{border-color:var(--blue-line)}
+.alert .sev{font:700 .62rem/1 var(--cond);letter-spacing:.16em;text-transform:uppercase;padding:4px 6px;border-radius:5px;color:var(--night);display:inline-block}
+.alert.fix .sev{background:var(--danger)}.alert.watch .sev{background:var(--amber)}.alert.info .sev{background:var(--blue)}
+.alert .ti{font:700 .98rem/1.25 var(--cond);letter-spacing:.04em;color:var(--chalk);margin:7px 0 3px}
+.alert .de{font-size:.86rem;color:var(--body)}
+.alert .cue{margin-top:8px;padding:8px 10px;border-radius:10px;background:var(--gold-tint);border-left:3px solid var(--gold);color:var(--chalk);font-size:.86rem}
+.alert .cue b{display:block;font:700 .6rem/1 var(--cond);letter-spacing:.16em;text-transform:uppercase;color:var(--gold-hot);margin-bottom:4px}
+.alert .meta{display:flex;gap:8px;align-items:center;margin-top:8px;font-size:.74rem;color:var(--faint)}
+.sheet{width:100%;border-collapse:separate;border-spacing:0;font-size:.78rem;font-variant-numeric:tabular-nums}
+.sheet th{position:sticky;top:0;background:var(--gold-deep);color:var(--bone);font:700 .64rem/1 var(--cond);letter-spacing:.1em;text-transform:uppercase;padding:8px 6px;text-align:left;white-space:nowrap;z-index:1}
+.sheet td{padding:6px;border-bottom:1px solid var(--line);white-space:nowrap;color:var(--lede)}
+.sheet tr:nth-child(even) td{background:rgba(255,255,255,.02)}
+.sheet tr.press td{background:var(--gold-tint)}
+.sheet td.good{color:var(--win);font-weight:600}.sheet td.bad{color:var(--danger);font-weight:600}
+.sheetwrap{overflow:auto;max-height:52vh;border:1px solid var(--line);border-radius:12px}
+.field{display:grid;gap:6px;margin-bottom:12px}
+.field label{font:600 .66rem/1 var(--cond);letter-spacing:.14em;text-transform:uppercase;color:var(--faint)}
+.field input,.field select{min-height:44px;border-radius:10px;border:1px solid var(--line2);background:var(--input);padding:0 12px;font-size:16px;color:var(--chalk)}
+.seg{display:flex;border:1px solid var(--line2);border-radius:11px;overflow:hidden}
+.seg button{flex:1;min-height:42px;font:700 .74rem/1 var(--cond);letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
+.seg button[aria-pressed="true"]{background:var(--gold);color:var(--night)}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.note{font-size:.8rem;color:var(--faint);line-height:1.45}
+.note a{color:var(--gold-hot)}
+.list{display:grid;gap:8px}
+.row2{display:flex;gap:8px;flex-wrap:wrap}
+
+/* ---------- start sheet (modal) */
+.modal{position:fixed;inset:0;z-index:30;display:grid;place-items:center;background:rgba(5,5,6,.72);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);padding:16px}
+.sheetm{width:min(720px,100%);max-height:100%;overflow:auto;background:var(--ink);border:1px solid var(--line2);border-radius:20px;padding:20px 20px 18px;box-shadow:0 30px 90px rgba(0,0,0,.6)}
+.hero{display:flex;gap:16px;align-items:center;margin-bottom:14px}
+.hero svg{width:62px;height:62px;flex:none}
+.hero h1{font:700 1.7rem/1.05 var(--display);letter-spacing:.03em;color:var(--chalk);text-transform:uppercase}
+.hero p{color:var(--dim);font-size:.9rem;margin-top:4px}
+.modes{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin:14px 0}
+.mode{text-align:left;border:1px solid var(--line2);border-radius:14px;padding:14px;background:var(--lift);display:grid;gap:4px;min-height:96px;transition:border-color .2s,background .2s}
+.mode:hover,.mode[aria-pressed="true"]{border-color:var(--gold);background:var(--gold-tint)}
+.mode b{font:700 .95rem/1.1 var(--cond);letter-spacing:.08em;text-transform:uppercase;color:var(--chalk);display:flex;align-items:center;gap:8px}
+.mode span{font-size:.82rem;color:var(--dim);line-height:1.4}
+.mode svg{width:18px;height:18px;color:var(--gold-hot)}
+.calib{position:absolute;z-index:9;left:50%;bottom:calc(16px + var(--safe-b));transform:translateX(-50%);background:rgba(20,20,22,.95);border:1px solid var(--gold-line);border-radius:14px;padding:12px 14px;display:flex;gap:12px;align-items:center;max-width:94%}
+.calib .t1{font:700 .9rem/1.2 var(--cond);letter-spacing:.06em;text-transform:uppercase;color:var(--chalk)}
+.calib .t2{font-size:.8rem;color:var(--dim)}
+.clipview{position:fixed;inset:0;z-index:40;background:rgba(5,5,6,.86);display:grid;place-items:center;padding:16px}
+.clipbox{width:min(760px,100%);background:var(--ink);border:1px solid var(--line2);border-radius:18px;padding:14px}
+.clipbox canvas{width:100%;display:block;border-radius:12px;background:#0d0d10}
+.clipbox h3{font:700 1rem/1.2 var(--cond);letter-spacing:.08em;text-transform:uppercase;color:var(--chalk);margin-bottom:8px}
+
+/* ---------- responsive: phone landscape (the tracking phone on the fence) */
+@media (max-width:1000px){.app{grid-template-columns:minmax(0,1fr) 340px}}
+@media (orientation:landscape) and (max-height:560px){
+  .app{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr);grid-template-areas:"stage"}
+  .top{display:none}
+  .side{position:fixed;z-index:20;top:0;right:0;bottom:0;width:min(400px,62vw);transform:translateX(102%);transition:transform .35s var(--ease);box-shadow:-20px 0 60px rgba(0,0,0,.5)}
+  .side.open{transform:none}
+  .board{top:calc(8px + var(--safe-t));min-width:200px}
+  .board .nm{padding:5px 10px;font-size:.8rem}
+  .pad{padding-top:6px}
+  .btn{min-height:40px;padding:0 12px}
+  .hud{top:8px}
+  .drawer{display:grid!important}
+}
+/* phone portrait / narrow: stage on top, panel below */
+@media (max-width:760px) and (orientation:portrait){
+  .app{grid-template-columns:minmax(0,1fr);grid-template-rows:auto auto minmax(0,1fr);grid-template-areas:"top" "stage" "side"}
+  .stage{aspect-ratio:16/9;min-height:auto}
+  .side{border-left:0;border-top:1px solid var(--line)}
+  .pad{position:static;background:var(--night);border-top:1px solid var(--line)}
+  .board{transform:scale(.86);transform-origin:top left;left:8px;top:8px}
+  .speed{bottom:10px}.speed .v{font-size:1.8rem}
+  .modes{grid-template-columns:1fr}
+  .padhost{display:block!important}
+}
+.drawer{display:none}
+.padhost{display:none}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<div class="app" id="app">
+  <header class="top">
+    <div class="brand">
+      <svg viewBox="0 0 64 64" aria-hidden="true"><use href="#gt-mark"/></svg>
+      <div><small>Geneva Tennis</small><b>Match Tracker</b></div>
+    </div>
+    <div class="grow"></div>
+    <span class="chip" id="chipSrc"><i></i><span>Demo</span></span>
+    <span class="chip" id="chipPose"><i></i><span>Pose</span></span>
+    <span class="chip" id="chipBall"><i></i><span>Ball</span></span>
+    <span class="chip" id="chipSync"><i></i><span>Sync</span></span>
+    <button class="iconbtn" id="btnSetup" aria-label="Match setup"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
+  </header>
+
+  <main class="stage" id="stage" data-src="demo">
+    <video id="video" playsinline muted></video>
+    <canvas id="view"></canvas>
+    <canvas id="overlay"></canvas>
+
+    <div class="board" id="board" aria-live="polite"></div>
+    <div class="hud">
+      <button class="iconbtn drawer" id="btnDrawer" aria-label="Open stats"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h10"/></svg></button>
+      <span class="chip live" id="chipLive" hidden><i></i><span>Live</span></span>
+      <span class="chip" id="chipFps"><span>— fps</span></span>
+    </div>
+    <div class="speed" id="speed" hidden><div class="v num" id="spV">0</div><div class="u" id="spU">mph · last shot</div><div class="s" id="spS"></div></div>
+    <div class="toast" id="toast" role="status"><div><div class="t1" id="toT1"></div><div class="t2" id="toT2"></div></div><div class="acts" id="toActs"></div></div>
+    <div class="calib" id="calib" hidden><div><div class="t1" id="caT1">Tap the near-left singles corner</div><div class="t2" id="caT2">Corner 1 of 4 · near baseline, left sideline</div></div><button class="btn sm" id="caUndo">Undo</button><button class="btn sm" id="caSkip">Use default</button></div>
+
+    <div class="pad" id="pad"></div>
+  </main>
+
+  <aside class="side" id="side">
+    <nav class="tabs" role="tablist" id="tabs">
+      <button class="tab" role="tab" data-pane="live" aria-selected="true">Live</button>
+      <button class="tab" role="tab" data-pane="stats">Stats</button>
+      <button class="tab" role="tab" data-pane="trends">Trends <span class="n" id="trendN" hidden>0</span></button>
+      <button class="tab" role="tab" data-pane="scout">Scout</button>
+      <button class="tab" role="tab" data-pane="sheet">Sheet</button>
+      <button class="tab" role="tab" data-pane="share">Share</button>
+    </nav>
+    <div class="panes" id="panes">
+      <section class="pane on" data-pane="live" id="paneLive"></section>
+      <section class="pane" data-pane="stats" id="paneStats"></section>
+      <section class="pane" data-pane="trends" id="paneTrends"></section>
+      <section class="pane" data-pane="scout" id="paneScout"></section>
+      <section class="pane" data-pane="sheet" id="paneSheet"></section>
+      <section class="pane" data-pane="share" id="paneShare"></section>
+    </div>
+  </aside>
+</div>
+
+<div class="modal" id="startModal" hidden></div>
+<div class="clipview" id="clipView" hidden></div>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="gt-mark" viewBox="0 0 64 64">
+      <circle cx="32" cy="32" r="30" fill="#C99A2C"/>
+      <circle cx="32" cy="32" r="30" fill="none" stroke="#DAAF48" stroke-width="1.5" opacity=".6"/>
+      <path d="M50.5 21.5A21 21 0 1 0 53 34H35" fill="none" stroke="#0B0B0D" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M10.5 22c8 2.5 13 8.6 13 16.5S18.6 52 13.6 54" fill="none" stroke="#F4F1EA" stroke-width="2.2" stroke-linecap="round" opacity=".9"/>
+    </symbol>
+  </defs>
+</svg>
+<!-- @SCRIPTS -->
+</body>
+</html>

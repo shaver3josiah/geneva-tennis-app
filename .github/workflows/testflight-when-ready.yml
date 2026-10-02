@@ -1,0 +1,63 @@
+name: TestFlight when ready
+
+# The first App Store Connect app record has to be created by a person (Apps → + → New App);
+# Apple's API refuses to create one. This watcher removes the "and then remember to run the
+# build" half of that chore: every 30 minutes it asks App Store Connect whether the record for
+# com.genevatennis.app exists yet, and the first time it does, with no build in it, it starts
+# the iOS TestFlight workflow. Once a build is there it switches itself off.
+#
+# Public repository, so scheduled runs cost nothing. Each run is one API call (~15 s).
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+permissions:
+  actions: write     # to start ios-testflight.yml and to disable this workflow
+  contents: read
+
+concurrency:
+  group: testflight-when-ready
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22.13'
+
+      - name: Ask App Store Connect
+        id: asc
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          set -euo pipefail
+          node scripts/asc-app.mjs com.genevatennis.app | tee -a "$GITHUB_OUTPUT"
+
+      - name: Start the first TestFlight build
+        if: steps.asc.outputs.exists == 'true' && steps.asc.outputs.builds == '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # never stack a second archive on one that is already running
+          if gh run list --workflow ios-testflight.yml --limit 5 --json status --jq '.[] | select(.status != "completed") | .status' | grep -q .; then
+            echo "An iOS TestFlight run is already in progress."; exit 0
+          fi
+          gh workflow run ios-testflight.yml --ref "${{ github.event.repository.default_branch }}"
+          echo "## Started the first TestFlight build" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Retire this watcher
+        if: steps.asc.outputs.exists == 'true' && steps.asc.outputs.builds != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow disable testflight-when-ready.yml || true
+          echo "## The app has a TestFlight build. This watcher is now disabled." >> "$GITHUB_STEP_SUMMARY"

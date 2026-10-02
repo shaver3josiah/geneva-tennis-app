@@ -1,0 +1,109 @@
+name: Build check (iOS)
+
+# The Android side is proven -- a real .apk was built and inspected. The iOS side had
+# never been COMPILED: 'expo prebuild --platform ios' and 'pod install' cannot run on
+# Windows, so the first anyone would learn that the pods do not resolve, or that a
+# native module fails to build, was twenty minutes into a signed TestFlight release.
+# This job moves that discovery to every pull request and every push to main.
+#
+# It signs nothing and reads no secret, so it also runs on a fork and on a pull request
+# FROM a fork, where no secret exists. Keep it that way: no signing, no upload, no
+# fastlane, no credentials.
+on:
+  push:
+    # Only the default branch. Without this filter a PR branch fires BOTH a push
+    # event AND a pull_request event for the same commit, and their github.ref differs
+    # (refs/heads/x vs refs/pull/N/merge), so the concurrency group below cannot dedupe
+    # them -- two macos-26 jobs per push. Unfiltered push would also fire on the v*
+    # release tag, racing the real TestFlight build for the same pod cache.
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+concurrency:
+  # macOS runners bill at ten times the Linux rate, so an in-flight run for a commit
+  # that has already been superseded is pure waste.
+  group: build-check-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read   # this workflow only ever reads the tree
+
+jobs:
+  ios-compile:
+    runs-on: macos-26
+    timeout-minutes: 45   # a hung macOS job otherwise burns six hours of runner time
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          # Expo SDK 57 requires Node >= 22.13.
+          node-version: '22.13'
+          cache: npm
+
+      # Same selector as ios-testflight.yml, and it must stay the same: a beta Xcode
+      # can compile something the release Xcode will not, which would leave this check
+      # green and the actual release red -- the exact failure this workflow exists to
+      # prevent. SDK 57 needs Xcode 26.4+, and the runner default is not always newest.
+      - name: Select newest Xcode
+        run: |
+          set -euo pipefail
+          XC=$(ls -d /Applications/Xcode*.app 2>/dev/null \
+               | grep -viE 'beta|rc|release[_ ]candidate' \
+               | sort -V | tail -1)
+          if [ -z "$XC" ]; then echo "::error::No non-beta Xcode found"; exit 1; fi
+          echo "Using $XC"
+          sudo xcode-select -s "$XC"
+          xcodebuild -version
+
+      - run: npm ci
+
+      # Pod specs and pod source archives come off the CocoaPods CDN, and re-fetching
+      # them is the slowest part of prebuild. ios/ itself is deliberately NOT cached:
+      # it is gitignored and regenerated every run, and a stale Pods directory is
+      # precisely the thing that would make this check lie.
+      - name: Cache CocoaPods downloads
+        uses: actions/cache@v5
+        with:
+          # Key and path match ios-testflight.yml EXACTLY, so the two workflows share
+          # ONE cache entry instead of writing two near-identical multi-hundred-MB ones
+          # against the repo's 10 GB limit. This job runs on every push to the default
+          # branch, which is the only scope a tag-triggered release run can read from --
+          # so it is what keeps the release pod download warm. ~/.cocoapods/repo is not
+          # listed: CocoaPods resolves through the trunk CDN and leaves it empty.
+          path: ~/Library/Caches/CocoaPods
+          key: ${{ runner.os }}-pods-${{ hashFiles('package-lock.json') }}
+          restore-keys: ${{ runner.os }}-pods-
+
+      # Regenerates ios/ and runs pod install itself -- there is no separate pod step.
+      # This one step already catches a broken config plugin or an unresolvable pod.
+      - name: Prebuild ios
+        env:
+          CI: '1'
+          EXPO_NO_GIT_STATUS: '1'
+        run: npx expo prebuild --platform ios --no-clean
+
+      - name: Compile, unsigned
+        run: |
+          set -euo pipefail
+          # Build the WORKSPACE, never the .xcodeproj -- against the project the Pods
+          # do not link. The scheme is the workspace basename (app.json expo.name with
+          # every non-alphanumeric character stripped), so read it off disk.
+          WS=$(ls -d ios/*.xcworkspace | head -1)
+          SCHEME=$(basename "$WS" .xcworkspace)
+          echo "workspace=$WS scheme=$SCHEME"
+
+          # Debug + iOS Simulator + CODE_SIGNING_*=NO compiles every native module and
+          # links every pod without a certificate, a team or a provisioning profile,
+          # which is what keeps this runnable on a fork. Debug does not bundle JS, so
+          # there is nothing to `expo export` here either.
+          xcodebuild build \
+            -workspace "$WS" \
+            -scheme "$SCHEME" \
+            -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO

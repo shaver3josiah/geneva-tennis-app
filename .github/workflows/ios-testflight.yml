@@ -1,0 +1,362 @@
+name: iOS TestFlight
+
+# Three ways in: push a v* tag, run it by hand, or the monthly keep-alive.
+#
+# The keep-alive is not optional maintenance. A TestFlight build STOPS BEING
+# INSTALLABLE 90 days after upload, and nothing warns anyone -- the app simply
+# vanishes from a player's phone one day. The team will sit on TestFlight
+# for months before this ever reaches the App Store, so a monthly re-upload of the
+# same code keeps them working. App Store Connect only requires the build number
+# to increase, and that is github.run_number.
+# (Learned the hard way on the Bloom/Hannah's Calculator pipeline.)
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+  schedule:
+    - cron: '0 7 1 * *'
+
+permissions:
+  contents: write   # the keep-alive stamps a commit; see the last step
+
+jobs:
+  testflight:
+    runs-on: macos-26
+    timeout-minutes: 60   # a hung macOS job otherwise burns six hours of runner time
+    env:
+      # Cloud signing: Xcode talks to App Store Connect itself and mints the
+      # certificate and profile on the runner. No .p12 / .mobileprovision to create,
+      # which matters because the owner has no Mac to create them on.
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      # Bundler cannot write to the system gem dir on the runner; keep gems in-tree.
+      BUNDLE_PATH: vendor/bundle
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22.13'
+          cache: npm
+
+      # SDK 57 needs Xcode 26.4+. Runners ship several Xcodes and the default is not
+      # always the newest, so select it explicitly instead of hoping. Betas and
+      # release candidates are excluded: a plain "newest" pick can land on a beta
+      # Xcode whose SDK App Store Connect then refuses to accept.
+      - name: Select newest Xcode
+        run: |
+          set -euo pipefail
+          XC=$(ls -d /Applications/Xcode*.app 2>/dev/null \
+               | grep -viE 'beta|rc|release[_ ]candidate' \
+               | sort -V | tail -1)
+          if [ -z "$XC" ]; then echo "::error::No non-beta Xcode found"; exit 1; fi
+          echo "Using $XC"
+          sudo xcode-select -s "$XC"
+          xcodebuild -version
+          xcodebuild -showsdks | grep -i iphoneos || true
+
+      - run: npm ci
+
+      # .env is gitignored, and EXPO_PUBLIC_* is INLINED INTO THE BUNDLE at build time.
+      # Without this the binary ships with no Firebase config at all: it installs, opens,
+      # and dead-ends on "unconfigured" -- a build nobody can sign in to. None of these
+      # values is a secret (a Firebase web config ships inside every copy of the app and
+      # firebase/firestore.rules is what protects the data); they live in a secret only
+      # because that is the one place a gitignored file can be kept in one piece.
+      - name: Write .env
+        env:
+          ENV_FILE: ${{ secrets.ENV_FILE }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' "$ENV_FILE" > .env
+
+          # A missing secret would otherwise produce a perfectly green build of a dead
+          # app. Fail here instead, where the message can name the cause.
+          grep -qE '^EXPO_PUBLIC_FIREBASE_PROJECT_ID=.' .env || {
+            echo "::error::The ENV_FILE secret is missing or has no EXPO_PUBLIC_FIREBASE_PROJECT_ID. See docs/START-HERE.md section A5."; exit 1; }
+          grep -qE '^EXPO_PUBLIC_USE_EMULATOR=1' .env && {
+            echo "::error::ENV_FILE points at the local emulator. A phone cannot reach it."; exit 1; } || true
+
+          # The bundler reads .env, but exporting them too removes any doubt about which
+          # working directory that lookup happens in.
+          grep -E '^EXPO_PUBLIC_[A-Z0-9_]+=' .env >> "$GITHUB_ENV"
+
+          echo "project $(grep -E '^EXPO_PUBLIC_FIREBASE_PROJECT_ID=' .env | cut -d= -f2)"
+
+      # Every cold pod install re-downloads React Native's prebuilt dependencies tarball
+      # (ReactNativeDependencies, hundreds of MB from Maven Central) plus git clones of
+      # boost, folly, glog and DoubleConversion. This is the download cache pod install
+      # checks before the network, so it must be restored BEFORE prebuild -- prebuild is
+      # what runs pod install. (No Firebase pods here: `firebase` is the JS SDK.)
+      #
+      # Keyed on package-lock.json because ios/ is gitignored, so there is no committed
+      # Podfile.lock to key on; the pod set follows the npm tree anyway. Entries are
+      # content-addressed per pod and version, so a stale prefix hit is never wrong.
+      # ios/Pods itself is NOT cached: prebuild re-resolves it every run, so a restored
+      # tree is a multi-GB round trip for a reinstall that happens regardless.
+      - name: Cache CocoaPods downloads
+        uses: actions/cache@v5
+        with:
+          path: ~/Library/Caches/CocoaPods
+          key: ${{ runner.os }}-pods-${{ hashFiles('package-lock.json') }}
+          restore-keys: ${{ runner.os }}-pods-
+
+      # Regenerates ios/. Hard-fails unless ios.bundleIdentifier is set in app.json
+      # ("Project must have a `ios.bundleIdentifier` set in the Expo config").
+      # prebuild runs pod install itself -- there is no separate pod step.
+      - name: Prebuild ios
+        env:
+          CI: '1'
+          EXPO_NO_GIT_STATUS: '1'
+        run: npx expo prebuild --platform ios --no-clean
+
+      # TestFlight rejects a build whose CFBundleVersion it has already seen, and the
+      # bare template writes that key as a LITERAL "1" -- not $(CURRENT_PROJECT_VERSION).
+      # So passing CURRENT_PROJECT_VERSION to xcodebuild does nothing, and the second
+      # release of the same marketing version would be refused as a duplicate. Stamp
+      # the plist that prebuild just generated instead. Safe to do here precisely
+      # because prebuild regenerates ios/ on every run.
+      - name: Stamp the build number
+        run: |
+          set -euo pipefail
+          WS=$(ls -d ios/*.xcworkspace | head -1)
+          PLIST="ios/$(basename "$WS" .xcworkspace)/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${{ github.run_number }}" "$PLIST"
+
+          # CFBundleShortVersionString is the MARKETING version -- the one a tester reads
+          # in TestFlight. app.json still says 1.0.0 and goes stale the moment Ship.ps1
+          # tags a release (it tags, it does not edit app.json), so on a tag build take
+          # the tag instead: v1.2.0 -> 1.2.0. workflow_dispatch and the monthly
+          # keep-alive have no tag to read, so they keep whatever app.json produced.
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            V="${GITHUB_REF_NAME#v}"
+            # Apple accepts only 1-3 dot-separated integers here, and only says so at
+            # upload, ~25 minutes in. Ship.ps1 takes -Version as a free string, so a
+            # hand-typed "1.2-beta" is reachable. Reject it now instead.
+            echo "$V" | grep -Eq '^[0-9]+(\.[0-9]+){0,2}$' || {
+              echo "::error::Tag $GITHUB_REF_NAME is not vX.Y.Z -- Apple rejects that as CFBundleShortVersionString."
+              exit 1
+            }
+            /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $V" "$PLIST"
+          fi
+
+          echo "version $(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$PLIST") (build $(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$PLIST"))"
+
+      - name: Write App Store Connect API key
+        env:
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          set -euo pipefail
+          # All four are used unquoted by xcodebuild below. An empty one there fails
+          # ~20 minutes later with an Apple error that names none of them, so check
+          # every one here rather than only the .p8.
+          for k in ASC_KEY_P8 ASC_KEY_ID ASC_ISSUER_ID APPLE_TEAM_ID; do
+            if [ -z "${!k:-}" ]; then
+              echo "::error::$k is not set. See docs/SHIPPING.md section 4."
+              exit 1
+            fi
+          done
+          # RAW .p8, plain echo. Do NOT base64-decode: a mangled PEM makes CryptoKit
+          # fail with invalidPEMDocument at export time.
+          echo "$ASC_KEY_P8" > "$RUNNER_TEMP/asc.p8"
+
+      # The App Store Connect API cannot CREATE an app record, only a person can (Apps → + →
+      # New App). Without one the upload fails at the last step of a 20-minute run, so ask
+      # first. The archive and export still run either way: they prove the iOS build, and the
+      # signed .ipa is kept as an artifact for the moment the record exists.
+      - name: Is there an App Store Connect app record?
+        id: asc
+        run: |
+          set -euo pipefail
+          ASC_KEY_PATH="$RUNNER_TEMP/asc.p8" node scripts/asc-app.mjs com.genevatennis.app | tee -a "$GITHUB_OUTPUT"
+
+      # Resolving gems takes ~1 minute and can fail on its own. Doing it here rather
+      # than in the upload step means a broken Gemfile costs a minute, not a 20-minute
+      # archive followed by a failure at the very last step.
+      - name: Install fastlane
+        run: bundle install
+
+      # No Gemfile.lock is committed, because Ruby is not installed on the Windows
+      # machine this repo is developed on and a hand-written lock would be a
+      # fabricated dependency graph. Bundler therefore re-resolves fastlane on every
+      # release, so a bad 2.x patch release can break a build that changed nothing.
+      #
+      # This uploads the lock bundler just resolved. Download it from the run, commit
+      # it, and releases become reproducible. The step then disables itself --
+      # hashFiles() returns an empty string when the file is not in the checkout, so
+      # once Gemfile.lock is committed this never runs again and nobody has to
+      # remember to delete it.
+      - name: Upload the resolved Gemfile.lock (until one is committed)
+        if: hashFiles('Gemfile.lock') == ''
+        uses: actions/upload-artifact@v5
+        with:
+          name: Gemfile.lock
+          path: Gemfile.lock
+          if-no-files-found: error
+
+      - name: Archive
+        run: |
+          set -euo pipefail
+          # Build the WORKSPACE, never the .xcodeproj -- against the project the Pods
+          # do not link. The scheme is the workspace basename (app.json expo.name with
+          # every non-alphanumeric character stripped), so read it off disk.
+          WS=$(ls -d ios/*.xcworkspace | head -1)
+          SCHEME=$(basename "$WS" .xcworkspace)
+          echo "workspace=$WS scheme=$SCHEME"
+
+          # Xcode's Release build phase runs Metro itself -- do NOT `expo export` first.
+          xcodebuild archive \
+            -workspace "$WS" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/app.xcarchive" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/asc.p8" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID"
+
+      # Apple rejects an upload with "Missing CFBundleIconName" AFTER the export and
+      # the upload have both run. Expo's prebuild generates the icon catalog, so this
+      # should always pass -- but checking here turns a ~20-minute round trip and a
+      # rejection email into a failure a few seconds after the archive.
+      - name: Verify the archive carries an icon
+        run: |
+          set -euo pipefail
+          APP=$(ls -d "$RUNNER_TEMP/app.xcarchive/Products/Applications/"*.app | head -1)
+          echo "Archived app: $APP"
+          if [ ! -f "$APP/Assets.car" ]; then
+            echo "::error::No Assets.car in the archive -- the asset catalog was not compiled."
+            exit 1
+          fi
+
+          # Assets.car existing only proves SOME asset compiled -- the splash screen is in
+          # there too. These two are the proof that the APP ICON specifically compiled:
+          # actool writes the sized icon PNGs beside Assets.car, and names the icon set in
+          # the catalog's own index.
+          PNGS=$(find "$APP" -maxdepth 1 -name 'AppIcon*.png' | wc -l | tr -d ' ')
+          CAR=$(/usr/bin/assetutil --info "$APP/Assets.car" 2>/dev/null | grep -c '"AppIcon"' || true)
+          echo "AppIcon PNGs beside Assets.car: $PNGS; AppIcon named inside Assets.car: $CAR"
+
+          NAME=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIconName" "$APP/Info.plist" 2>/dev/null || true)
+          if [ -n "$NAME" ]; then
+            echo "CFBundleIconName=$NAME, Assets.car present."
+            exit 0
+          fi
+
+          # The icon is compiled but undeclared. Xcode 26 ran actool with --app-icon AppIcon
+          # and then ran builtin-infoPlistUtility with -additionalcontentfile pointing at
+          # the catalog's partial plist, and the key still did not arrive -- verified in the
+          # build log of run 34977481505. App Store Connect rejects the upload without it,
+          # AFTER the export and the upload have both run.
+          #
+          # So stamp it, exactly as the build number and marketing version are stamped a few
+          # steps above. Editing the archive is safe here and only here: -exportArchive
+          # re-signs the app, so a signature broken now is replaced in the next step.
+          #
+          # This is gated on the two checks above on purpose. Setting CFBundleIconName when
+          # the catalog carries no icon would buy a passing upload and ship an app with a
+          # blank icon on every home screen -- turning a loud failure into a silent one,
+          # which is the opposite of what this step is for.
+          if [ "$PNGS" -eq 0 ] && [ "$CAR" -eq 0 ]; then
+            echo "::error::CFBundleIconName is missing AND no compiled app icon is in the bundle -- the icon is genuinely absent, not merely undeclared. Do not paper over this."
+            echo "--- AppIcon.appiconset as prebuild generated it ---"
+            ls -la ios/*/Images.xcassets/AppIcon.appiconset/ 2>&1 || true
+            cat ios/*/Images.xcassets/AppIcon.appiconset/Contents.json 2>&1 || true
+            echo "--- files at the top of the .app ---"
+            ls -1 "$APP" | head -40
+            exit 1
+          fi
+
+          echo "::warning::CFBundleIconName was missing from the built Info.plist; stamping it from the compiled catalog."
+          /usr/libexec/PlistBuddy -c "Add :CFBundleIconName string AppIcon" "$APP/Info.plist"
+          echo "CFBundleIconName=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconName' "$APP/Info.plist")"
+
+      - name: Export IPA
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>teamID</key><string>$APPLE_TEAM_ID</string>
+            <key>uploadSymbols</key><true/>
+          </dict>
+          </plist>
+          PLIST
+
+          # The same four cloud-signing arguments are required AGAIN here. This is the
+          # step that fails with "Cloud signing permission error" if the App Store
+          # Connect API key has the Developer role instead of App Manager or Admin --
+          # the archive above succeeds either way, so the role trap only shows up here.
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/app.xcarchive" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/asc.p8" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+
+      - name: Upload to TestFlight
+        if: steps.asc.outputs.exists == 'true'
+        run: |
+          set -euo pipefail
+          IPA=$(ls "$RUNNER_TEMP/export"/*.ipa | head -1)
+          echo "Uploading $IPA"
+          IPA_PATH="$IPA" ASC_KEY_PATH="$RUNNER_TEMP/asc.p8" \
+            bundle exec fastlane ios upload_testflight
+
+      - name: Keep the signed .ipa (no app record yet)
+        if: steps.asc.outputs.exists != 'true'
+        uses: actions/upload-artifact@v5
+        with:
+          name: geneva-tennis-ipa
+          path: ${{ runner.temp }}/export/*.ipa
+          if-no-files-found: error
+
+      - name: Say what is left
+        if: steps.asc.outputs.exists != 'true'
+        run: |
+          {
+            echo "## :warning: Built and signed, not uploaded: App Store Connect has no app record yet"
+            echo ""
+            echo "Create it once: appstoreconnect.apple.com → Apps → + → New App → iOS, name **Geneva Tennis**,"
+            echo "English (U.S.), bundle ID **com.genevatennis.app**, SKU **geneva-tennis-app**, Full Access."
+            echo ""
+            echo "The *TestFlight when ready* workflow checks every 30 minutes and starts the upload build by itself."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::warning title=No App Store Connect app record::Create Geneva Tennis (com.genevatennis.app) in App Store Connect; the watcher workflow then uploads to TestFlight automatically."
+
+      # Runs even when an earlier step failed: the private key must not outlive the job.
+      - name: Remove App Store Connect API key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/asc.p8"
+
+      # GitHub disables a scheduled workflow after 60 days without repository
+      # activity -- which would quietly kill the keep-alive about a month before the
+      # build it exists to renew expires. A commit per scheduled run resets that
+      # clock and doubles as a plain-text record of the last upload.
+      #
+      # NO [skip ci] in the message. The push uses GITHUB_TOKEN, which starts no workflow
+      # runs anyway, so the marker never did anything here -- except that GitHub also
+      # skips a TAG push whose commit carries it, so tagging a release onto this commit
+      # (it is the tip of main from the 1st of the month) would build nothing at all.
+      - name: Stamp the keep-alive
+        if: github.event_name == 'schedule'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          mkdir -p .github
+          echo "last keep-alive upload: $(date -u +'%Y-%m-%d %H:%M UTC')  (build ${{ github.run_number }})" > .github/last-keepalive.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/last-keepalive.txt
+          git commit -m "chore: TestFlight keep-alive, build ${{ github.run_number }}"
+          git push origin HEAD:${{ github.event.repository.default_branch }}

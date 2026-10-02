@@ -1,0 +1,148 @@
+name: App Store metadata
+
+# The listing, the review notes and the demo account live in
+# scripts/appstore-metadata.mjs, but the credentials that push them (ASC_KEY_ID,
+# ASC_ISSUER_ID, ASC_KEY_P8) exist only as repository secrets. Before this workflow the
+# only way to run the push was to copy those secrets onto a laptop, which is the one
+# thing the script's own header says not to do -- so in practice the listing was pushed
+# by hand or not at all, and "the file IS the listing" was true only in intent.
+#
+# App Review asks for its answers in the Notes field. Those answers are in REVIEW_NOTES,
+# and this is what gets them to Apple without a human holding a signing key.
+#
+# THE FLOW. A v* tag builds and uploads to TestFlight (ios-testflight.yml). When that
+# run succeeds, this one starts by itself, waits for Apple to finish processing that
+# exact version, pushes the listing with that build attached, and then reads every
+# field back and fails if App Store Connect does not hold what the file says. Every
+# dry run showed "would patch" for every field whether it differed or not, so until
+# the read-back existed nobody could tell a push that took from one that did not.
+#
+# Nothing here submits for review. Sending a version to review stays a human decision
+# in App Store Connect. scripts/release-panel.mjs (npm run release:panel) is the page
+# that starts this by hand.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry:
+        description: "Print what would change and change nothing. Run this first."
+        type: boolean
+        default: true
+      wait_for_version:
+        description: "Optional, e.g. 1.0.6: wait for Apple to process that version and attach exactly that build."
+        type: string
+        default: ''
+  # Manual only for Geneva Tennis, for now. The automatic run after each TestFlight tag
+  # build needs an App Store Connect app record and the REVIEW_* demo-account secrets, and
+  # neither exists until the app is headed for the App Store (TestFlight needs neither).
+  # Restore the trigger when it is:
+  #   workflow_run:
+  #     workflows: ['iOS TestFlight']
+  #     types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  metadata:
+    # From a TestFlight run, only a successful TAG build. A dispatch or the monthly
+    # keep-alive has no tag and ships app.json's 1.0.0, which the script would refuse
+    # anyway; skipping here keeps that from turning into a red run every month.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       startsWith(github.event.workflow_run.head_branch, 'v'))
+    runs-on: ubuntu-24.04
+    # One push at a time, and QUEUED rather than replaced. The default keeps a single
+    # pending run and cancels it when another arrives, so a Preview clicked while a
+    # tag's run waited on Apple would have silently dropped the next tag's push. At job
+    # level so the workflow_run events this job skips never enter the group at all.
+    concurrency:
+      group: appstore-metadata
+      cancel-in-progress: false
+      queue: max
+    # Apple takes five minutes to an hour to process an upload; the script gives up at
+    # WAIT_MINUTES, and this sits above it so the script's message is what you read.
+    timeout-minutes: 75
+    env:
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+      # The SAME account scripts/review-account.mjs provisions and proves. Passing
+      # the REVIEW_* names means App Review is handed the credential that script
+      # signed into, rather than a second copy that can drift out of date -- which
+      # is the failure that cost version code 18 on Play.
+      REVIEW_EMAIL: ${{ secrets.REVIEW_EMAIL }}
+      REVIEW_PASSWORD: ${{ secrets.REVIEW_PASSWORD }}
+      # The listing's three URLs are the owner's own pages, so they are repository VARIABLES,
+      # not secrets. Unset, the script keeps its reserved placeholders and refuses to push.
+      PRIVACY_POLICY_URL: ${{ vars.PRIVACY_POLICY_URL }}
+      SUPPORT_URL: ${{ vars.SUPPORT_URL }}
+      MARKETING_URL: ${{ vars.MARKETING_URL }}
+      # The tag name (v1.0.6) on the automatic path, the input on a dispatch. Passed
+      # through env, never pasted into a script, because a tag name is text.
+      WAIT_FOR_VERSION: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || inputs.wait_for_version }}
+      WAIT_MINUTES: '60'
+      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry }}
+    steps:
+      # workflow_run checks out the tip of main by default, which can be commits past the
+      # tag by the time the build finishes. The automatic push uses the tagged commit, the
+      # one the panel saw CI pass; a dispatch uses main, so a notes fix made after
+      # tagging can still be pushed without a new build.
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+
+      # NO npm ci. The script imports only node: builtins, and an install would run
+      # third-party lifecycle scripts in a job holding the App Store Connect Admin key
+      # and the demo password.
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22.13'
+
+      - name: Push the listing
+        run: |
+          set -euo pipefail
+
+          # A missing secret would otherwise surface as a confusing API error several
+          # calls in, after some of the listing had already been patched.
+          for v in ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8 REVIEW_EMAIL REVIEW_PASSWORD; do
+            if [ -z "${!v:-}" ]; then
+              echo "::error::$v is not set as a repository secret. See docs/SHIPPING.md."
+              exit 1
+            fi
+          done
+
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "DRY RUN -- nothing will be changed."
+            node scripts/appstore-metadata.mjs --dry
+          else
+            node scripts/appstore-metadata.mjs
+          fi
+
+      # Every field read back from App Store Connect and compared with the file. A push
+      # that returned 200 but did not stick fails here instead of at App Review.
+      - name: Read it back
+        if: env.DRY_RUN != 'true'
+        run: node scripts/appstore-metadata.mjs --expect-clean
+
+      - name: Say what was and was not done
+        if: success()
+        run: |
+          {
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "### Dry run: nothing was changed"
+              echo ""
+              echo "The log of **Push the listing** says what differs. Run again with dry off to push it."
+            else
+              echo "### Pushed the listing, the review notes and the demo account, and read them back"
+            fi
+            echo ""
+            echo "Still done by hand, on purpose:"
+            echo ""
+            echo "- **App Privacy** (the nutrition label). There is no API for it; answer it in"
+            echo "  the console against the table in \`docs/APP-STORE.md\` section 5."
+            echo "- **Screenshots** — \`scripts/store-screenshots.mjs\` uploads those."
+            echo "- **Submitting for review** — a human decision in App Store Connect."
+          } >> "$GITHUB_STEP_SUMMARY"

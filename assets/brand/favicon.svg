@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024"><defs>
+      <radialGradient id="vb" cx="38%" cy="32%" r="78%"><stop offset="0" stop-color="#EBC967"/><stop offset=".5" stop-color="#C99A2C"/><stop offset="1" stop-color="#8A6512"/></radialGradient>
+      <radialGradient id="vs" cx="50%" cy="50%" r="50%"><stop offset=".86" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity=".28"/></radialGradient>
+      <filter id="vf" x="0" y="0" width="100%" height="100%"><feTurbulence type="fractalNoise" baseFrequency="0.594" numOctaves="2" seed="7"/><feColorMatrix values="0 0 0 0 0.35  0 0 0 0 0.25  0 0 0 0 0.05  0 0 0 0.9 0"/><feComposite in2="SourceGraphic" operator="in"/></filter>
+    </defs>
+    <circle cx="512" cy="527.1515151515151" r="509.09090909090907" fill="#000" opacity=".35"/>
+    <circle cx="512" cy="512" r="500" fill="url(#vb)"/>
+    <circle cx="512" cy="512" r="500" fill="url(#vs)"/>
+    <circle cx="512" cy="512" r="500" fill="#fff" filter="url(#vf)" opacity=".22"/>
+    <circle cx="512" cy="512" r="492.42424242424244" fill="none" stroke="#DAAF48" stroke-opacity=".55" stroke-width="7.575757575757576"/>
+    <path d="M 785.9 282.2 A 357.57575757575756 357.57575757575756 0 1 0 869.6 512 L 593.8 512" fill="none" stroke="#5A420C" stroke-opacity=".35" stroke-width="87.87878787878788" stroke-linecap="round" stroke-linejoin="round" transform="translate(6.0606060606060606 10.606060606060606)"/>
+    <path d="M 785.9 282.2 A 357.57575757575756 357.57575757575756 0 1 0 869.6 512 L 593.8 512" fill="none" stroke="#FBF7EE" stroke-width="87.87878787878788" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M 657.4545454545455 366.54545454545456 L 966.5454545454545 380.3636363636364 L 966.5454545454545 389.0909090909091 L 657.4545454545455 402.90909090909093 A 18.18181818181818 18.18181818181818 0 0 1 657.4545454545455 366.54545454545456 Z" fill="#FBF7EE" opacity=".92"/>
+    <path d="M 739.2727272727273 440.030303030303 L 993.8181818181818 448.66666666666663 L 993.8181818181818 454.1212121212121 L 739.2727272727273 462.75757575757575 A 11.363636363636363 11.363636363636363 0 0 1 739.2727272727273 440.030303030303 Z" fill="#FBF7EE" opacity=".62"/></svg>

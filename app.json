@@ -1,0 +1,71 @@
+{
+  "expo": {
+    "name": "Geneva Tennis",
+    "slug": "geneva-tennis-app",
+    "version": "1.0.0",
+    "orientation": "default",
+    "icon": "./assets/icon.png",
+    "scheme": "genevatennis",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0B0B0D",
+    "primaryColor": "#C99A2C",
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.genevatennis.app",
+      "buildNumber": "1",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSCameraUsageDescription": "Match Tracker watches the court through the camera to follow the ball and both players. Video is analysed on the phone and is not uploaded."
+      }
+    },
+    "android": {
+      "package": "com.genevatennis.app",
+      "versionCode": 1,
+      "permissions": [
+        "android.permission.CAMERA"
+      ],
+      "adaptiveIcon": {
+        "backgroundColor": "#0B0B0D",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-status-bar",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "backgroundColor": "#0B0B0D",
+          "imageWidth": 180
+        }
+      ],
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Match Tracker can listen for the pop of the racket to time each shot. No audio is recorded or uploaded.",
+          "recordAudioAndroid": true,
+          "enableBackgroundPlayback": false
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/android-icon-monochrome.png",
+          "color": "#C99A2C",
+          "mode": "production"
+        }
+      ],
+      "./plugins/with-play-manifest",
+      "expo-mail-composer",
+      "expo-sharing"
+    ]
+  }
+}

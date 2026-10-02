@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024"><defs>
+      <radialGradient id="ab" cx="38%" cy="32%" r="78%"><stop offset="0" stop-color="#EBC967"/><stop offset=".5" stop-color="#C99A2C"/><stop offset="1" stop-color="#8A6512"/></radialGradient>
+      <radialGradient id="as" cx="50%" cy="50%" r="50%"><stop offset=".86" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity=".28"/></radialGradient>
+      <filter id="af" x="0" y="0" width="100%" height="100%"><feTurbulence type="fractalNoise" baseFrequency="0.934" numOctaves="2" seed="7"/><feColorMatrix values="0 0 0 0 0.35  0 0 0 0 0.25  0 0 0 0 0.05  0 0 0 0.9 0"/><feComposite in2="SourceGraphic" operator="in"/></filter>
+    </defs>
+    <circle cx="512" cy="521.6363636363636" r="323.78181818181815" fill="#000" opacity=".35"/>
+    <circle cx="512" cy="512" r="318" fill="url(#ab)"/>
+    <circle cx="512" cy="512" r="318" fill="url(#as)"/>
+    <circle cx="512" cy="512" r="318" fill="#fff" filter="url(#af)" opacity=".22"/>
+    <circle cx="512" cy="512" r="313.1818181818182" fill="none" stroke="#DAAF48" stroke-opacity=".55" stroke-width="4.818181818181818"/>
+    <path d="M 686.2 365.8 A 227.4181818181818 227.4181818181818 0 1 0 739.4 512 L 564.0 512" fill="none" stroke="#5A420C" stroke-opacity=".35" stroke-width="55.89090909090909" stroke-linecap="round" stroke-linejoin="round" transform="translate(3.8545454545454545 6.745454545454545)"/>
+    <path d="M 686.2 365.8 A 227.4181818181818 227.4181818181818 0 1 0 739.4 512 L 564.0 512" fill="none" stroke="#FBF7EE" stroke-width="55.89090909090909" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M 604.5090909090909 419.4909090909091 L 801.090909090909 428.2792727272727 L 801.090909090909 433.8298181818182 L 604.5090909090909 442.6181818181818 A 11.563636363636363 11.563636363636363 0 0 1 604.5090909090909 419.4909090909091 Z" fill="#FBF7EE" opacity=".92"/>
+    <path d="M 656.5454545454545 466.2272727272727 L 818.4363636363637 471.71999999999997 L 818.4363636363637 475.1890909090909 L 656.5454545454545 480.6818181818182 A 7.2272727272727275 7.2272727272727275 0 0 1 656.5454545454545 466.2272727272727 Z" fill="#FBF7EE" opacity=".62"/></svg>

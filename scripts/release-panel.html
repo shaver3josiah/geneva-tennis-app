@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Release Panel</title>
+<style>
+  :root {
+    --bg: #F6F6F4; --card: #FFFFFF; --fg: #16161A; --muted: #5C5C66; --line: #DEDED8;
+    --accent: #B40A19; --btn: #B40A19; --ok: #0F6B3A; --warn: #8A4B00; --bad: #B40A19; --code: #F0F0EC;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0E0E11; --card: #17171B; --fg: #EDEDEF; --muted: #A2A2AD; --line: #2C2C33;
+      --accent: #FF5A63; --ok: #5FD394; --warn: #F2B35A; --bad: #FF6B72; --code: #111114;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 860px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 1.5rem; margin: 0 0 4px; }
+  h2 { font-size: 1.1rem; margin: 0 0 4px; }
+  p { margin: 0 0 12px; }
+  .sub { color: var(--muted); margin-bottom: 24px; }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 18px; margin-bottom: 16px; }
+  .hint { color: var(--muted); font-size: .92rem; }
+  button { font: inherit; font-weight: 600; min-height: 44px; padding: 0 16px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--fg); cursor: pointer; }
+  button.primary { background: var(--btn); border-color: var(--btn); color: #fff; }
+  button:disabled { opacity: .5; cursor: default; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  input, textarea { font: 16px/1.4 ui-monospace, Consolas, monospace; width: 100%; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--fg); }
+  input.version { width: 9ch; font-size: 16px; }
+  textarea { min-height: 120px; resize: vertical; }
+  pre { background: var(--code); border: 1px solid var(--line); border-radius: 8px; padding: 12px; overflow-x: auto; font: 13px/1.5 ui-monospace, Consolas, monospace; white-space: pre-wrap; word-break: break-word; margin: 12px 0 0; }
+  .secret { border-top: 1px solid var(--line); padding: 10px 0; }
+  .secret:first-of-type { border-top: 0; }
+  .secret .name { font: 600 14px ui-monospace, Consolas, monospace; overflow-wrap: anywhere; }
+  .chip { font-size: .8rem; font-weight: 600; padding: 2px 8px; border-radius: 99px; border: 1px solid currentColor; white-space: nowrap; }
+  .set { color: var(--ok); } .missing { color: var(--warn); } .bad { color: var(--bad); }
+  .secret form { margin-top: 8px; display: grid; gap: 8px; }
+  .set-list { margin: 12px 0 0; overflow-wrap: anywhere; font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
+  .msg { font-size: .92rem; margin-top: 6px; }
+  ul.runs, ol.todo { margin: 0; padding-left: 20px; }
+  ul.runs li { margin: 4px 0; }
+  ol.todo li { margin: 8px 0; }
+  a { color: var(--accent); }
+  .spread { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Geneva Tennis releases</h1>
+  <p class="sub" id="where">Loading…</p>
+
+  <section aria-labelledby="h-secrets">
+    <h2 id="h-secrets">1. What GitHub is holding</h2>
+    <p class="hint">The builds and the store pushes read these repository secrets. A missing one gets a box below. What you paste goes straight to GitHub and is never shown again, here or anywhere.</p>
+    <div id="secrets"></div>
+  </section>
+
+  <section aria-labelledby="h-listing">
+    <h2 id="h-listing">2. App Store listing</h2>
+    <p class="hint">Sends the description, keywords, age rating, review notes, demo login and newest build from <code>scripts/appstore-metadata.mjs</code> to App Store Connect, then reads every field back. Preview first: it changes nothing and lists what differs.</p>
+    <div class="row">
+      <button id="dry">Preview what would change</button>
+      <button id="push" class="primary">Push to App Store Connect</button>
+    </div>
+    <p class="msg" id="listing-msg" aria-live="polite"></p>
+    <pre id="listing-out" hidden></pre>
+  </section>
+
+  <section aria-labelledby="h-ship">
+    <h2 id="h-ship">3. Ship a new version</h2>
+    <p class="hint">Tags the tip of <code>main</code>. That builds the iPhone app for TestFlight and the Android bundle for Play's internal track. Once Apple has processed the iPhone build, the listing is pushed with that build attached and read back, all by itself, creating the new version in App Store Connect if the last one was already approved. Nothing is sent for review. For an update, write the "What's New" text in App Store Connect before you submit.</p>
+    <div class="row">
+      <label for="ver">Version</label>
+      <input id="ver" class="version" inputmode="decimal" autocomplete="off">
+      <button id="tag" class="primary">Tag and build</button>
+    </div>
+    <p class="msg" id="tag-msg" aria-live="polite"></p>
+  </section>
+
+  <section aria-labelledby="h-runs">
+    <div class="spread"><h2 id="h-runs">4. Recent release runs</h2><button id="refresh">Refresh</button></div>
+    <ul class="runs" id="runs"></ul>
+  </section>
+
+  <section aria-labelledby="h-todo">
+    <h2 id="h-todo">5. Only you can do these</h2>
+    <ol class="todo">
+      <li><strong>App Privacy</strong> in App Store Connect (no API exists). Answers: <a href="https://github.com/shaver3josiah/geneva-tennis-app/blob/main/docs/APP-STORE.md#5-app-privacy" target="_blank" rel="noopener noreferrer">APP-STORE.md section 5</a>. <a href="https://appstoreconnect.apple.com/apps" target="_blank" rel="noopener noreferrer">Open App Store Connect</a> (App Privacy is under the app's own page)</li>
+      <li><strong>The screen recording</strong>, if App Review asks for one, on a real iPhone: <a href="https://github.com/shaver3josiah/geneva-tennis-app/blob/main/docs/APP-STORE.md#63-if-app-review-asks-for-a-screen-recording" target="_blank" rel="noopener noreferrer">APP-STORE.md 6.3</a>. Afterwards run <code>npm run review:account</code>, because recording the deletion deletes the demo login.</li>
+      <li><strong>Reply to App Review</strong> with the recording, then <strong>Submit for Review</strong>. <a href="https://appstoreconnect.apple.com/apps" target="_blank" rel="noopener noreferrer">Open App Store Connect</a></li>
+      <li><strong>Play:</strong> the service account (section 1 above takes its JSON), App access matching the demo login, Data safety from <a href="https://github.com/shaver3josiah/geneva-tennis-app/blob/main/docs/SHIPPING.md" target="_blank" rel="noopener noreferrer">SHIPPING.md 7.1.1</a>, then send for review. <a href="https://play.google.com/console" target="_blank" rel="noopener noreferrer">Open Play Console</a></li>
+    </ol>
+  </section>
+</main>
+
+<script>
+const TOKEN = '__TOKEN__';
+const $ = (id) => document.getElementById(id);
+
+async function api(path, body) {
+  const res = await fetch(path, {
+    method: body ? 'POST' : 'GET',
+    headers: { 'x-panel-token': TOKEN, 'content-type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await res.json().catch(() => ({ error: res.statusText }));
+  if (!res.ok) throw new Error(data.error || String(res.status));
+  return data;
+}
+
+function el(tag, attrs = {}, ...kids) {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === 'class') n.className = v; else if (k.startsWith('on')) n.addEventListener(k.slice(2), v); else n.setAttribute(k, v);
+  }
+  for (const k of kids) n.append(k);
+  return n;
+}
+
+function say(id, text, kind = '') {
+  const m = $(id);
+  m.textContent = text;
+  m.className = 'msg ' + kind;
+}
+
+function renderSecrets(list) {
+  const box = $('secrets');
+  box.replaceChildren();
+  const missing = list.filter((s) => !s.set);
+  const present = list.filter((s) => s.set);
+  box.append(el('p', { class: missing.length ? 'missing' : 'set' },
+    missing.length ? `${missing.length} missing. Each one below says what it unlocks.` : 'All set.'));
+  // Only what is missing gets a row; the rest is one line, so the box that needs
+  // filling in is never a scroll below eleven that do not.
+  for (const s of missing) {
+    const row = el('div', { class: 'secret' },
+      el('div', { class: 'spread' },
+        el('span', { class: 'name' }, s.name),
+        el('span', { class: 'chip ' + (s.set ? 'set' : 'missing') }, s.set ? 'set' : 'missing')),
+      el('div', { class: 'hint' }, 'For ' + s.for));
+    if (!s.set) {
+      const id = 'v-' + s.name;
+      const field = s.multiline
+        ? el('textarea', { id, spellcheck: 'false', autocomplete: 'off' })
+        : el('input', { id, type: s.password ? 'password' : 'text', spellcheck: 'false', autocomplete: 'off' });
+      const msg = el('p', { class: 'msg', 'aria-live': 'polite' });
+      const save = el('button', { class: 'primary', type: 'submit' }, 'Save to GitHub');
+      const form = el('form', {
+        onsubmit: async (e) => {
+          e.preventDefault();
+          save.disabled = true;
+          msg.textContent = 'Saving…';
+          msg.className = 'msg';
+          try {
+            await api('/api/secret', { name: s.name, value: field.value });
+            field.value = '';
+            await load();
+          } catch (err) {
+            msg.textContent = err.message;
+            msg.className = 'msg bad';
+            save.disabled = false;
+          }
+        },
+      }, el('label', { for: id, class: 'hint' }, 'Paste the value'), field, el('div', { class: 'row' }, save), msg);
+      row.append(form);
+    }
+    box.append(row);
+  }
+  if (present.length) {
+    box.append(el('p', { class: 'hint set-list' },
+      el('span', { class: 'chip set' }, 'set'), ' ', present.map((s) => s.name).join(', ')));
+  }
+}
+
+function renderRuns(runs) {
+  const ul = $('runs');
+  ul.replaceChildren();
+  if (!runs.length) ul.append(el('li', {}, 'None yet.'));
+  for (const r of runs) {
+    const state = r.status === 'completed' ? r.conclusion : r.status;
+    const cls = state === 'success' ? 'set' : state === 'failure' ? 'bad' : 'missing';
+    ul.append(el('li', {},
+      el('span', { class: 'chip ' + cls }, state), ' ',
+      el('a', { href: r.url, target: '_blank', rel: 'noopener noreferrer' }, r.workflowName), ' ',
+      el('span', { class: 'hint' }, `${r.headBranch} · ${new Date(r.createdAt).toLocaleString()}`)));
+  }
+}
+
+async function load() {
+  try {
+    const s = await api('/api/status');
+    $('where').textContent = `${s.repo} · latest release v${s.latestTag ?? 'none'}`;
+    if (!$('ver').value) $('ver').value = s.nextVersion;
+    renderSecrets(s.secrets);
+    renderRuns(s.runs);
+  } catch (e) {
+    $('where').textContent = 'Could not read GitHub: ' + e.message + '. Is gh signed in?';
+  }
+}
+
+async function listing(dry) {
+  if (!dry && !confirm('Push the listing, review notes and demo login to App Store Connect now?\n\nIt does not submit for review.')) return;
+  $('dry').disabled = $('push').disabled = true;
+  const out = $('listing-out');
+  out.hidden = true;
+  say('listing-msg', dry ? 'Starting a dry run…' : 'Starting the push…');
+  try {
+    const run = await api('/api/listing', { dry });
+    const started = Date.now();
+    for (;;) {
+      const r = await api('/api/run?id=' + run.id);
+      if (r.status === 'completed') {
+        const good = r.conclusion === 'success';
+        say('listing-msg', `${dry ? 'Dry run' : 'Push'} ${good ? 'finished' : r.conclusion}. `, good ? 'set' : 'bad');
+        $('listing-msg').append(el('a', { href: r.url, target: '_blank', rel: 'noopener noreferrer' }, 'Open the run'));
+        out.textContent = r.output || '(no output captured; open the run)';
+        out.hidden = false;
+        break;
+      }
+      say('listing-msg', `${r.status}… ${Math.round((Date.now() - started) / 1000)}s`);
+      await new Promise((ok) => setTimeout(ok, 5000));
+    }
+  } catch (e) {
+    say('listing-msg', e.message, 'bad');
+  } finally {
+    $('dry').disabled = $('push').disabled = false;
+    load();
+  }
+}
+
+$('dry').addEventListener('click', () => listing(true));
+$('push').addEventListener('click', () => listing(false));
+$('refresh').addEventListener('click', load);
+$('tag').addEventListener('click', async () => {
+  const v = $('ver').value.trim().replace(/^v/, '');
+  if (!confirm(`Tag v${v} on main and build both apps?\n\niPhone goes to TestFlight and its listing is pushed automatically; Android goes to Play's internal track if its secret is set. Nothing is sent for review.
+
+This tags main at its current commit.`)) return;
+  $('tag').disabled = true;
+  say('tag-msg', 'Checking CI and tagging…');
+  try {
+    const r = await api('/api/tag', { version: v });
+    say('tag-msg', `${r.tag} pushed at ${r.sha.slice(0, 7)}. The builds are starting; they appear under Recent release runs.`, 'set');
+    setTimeout(load, 8000);
+  } catch (e) {
+    say('tag-msg', e.message, 'bad');
+  } finally {
+    $('tag').disabled = false;
+  }
+});
+
+load();
+</script>
+</body>
+</html>

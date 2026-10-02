@@ -1,0 +1,60 @@
+# Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
+
+# dependencies
+node_modules/
+
+# Expo
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+
+# Native
+.kotlin/
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+# docs/SHIPPING.md offers writing the keystore to keystore.base64.txt instead of the
+# clipboard, and Ship.ps1 does `git add -A` -- that is the signing key in a public repo.
+*.base64.txt
+
+# Metro
+.metro-health-check*
+
+# debug
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# macOS
+.DS_Store
+*.pem
+
+# local env files
+.env*.local
+
+# typescript
+*.tsbuildinfo
+
+# generated native folders
+/ios
+/android
+.env
+
+# emulator logs (Ship.ps1 does `git add -A`, so keep these out of commits)
+*-debug.log
+.firebase/
+
+# scratch: an extracted dependency tarball, 13 MB, not source. Safe to delete.
+erchk/
+
+# fastlane / bundler (iOS workflow installs gems in-tree)
+vendor/bundle/
+fastlane/report.xml
+fastlane/Preview.html
+
+# local tool config (preview launch, permissions)
+.claude/

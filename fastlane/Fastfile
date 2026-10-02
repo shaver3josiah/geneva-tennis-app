@@ -1,0 +1,22 @@
+# Only job: hand the already-built, already-signed .ipa to TestFlight.
+# xcodebuild does the signing (cloud signing), so nothing here touches certificates.
+
+platform :ios do
+  desc "Upload the exported .ipa to TestFlight"
+  lane :upload_testflight do
+    # Same App Store Connect key the xcodebuild steps used, so one key covers
+    # signing and uploading. The role must be App Manager or Admin.
+    app_store_connect_api_key(
+      key_id: ENV.fetch("ASC_KEY_ID"),
+      issuer_id: ENV.fetch("ASC_ISSUER_ID"),
+      key_filepath: ENV.fetch("ASC_KEY_PATH")
+    )
+
+    pilot(
+      ipa: ENV.fetch("IPA_PATH"),
+      # Apple's processing takes many minutes and the build is already accepted by
+      # then; waiting would just burn runner time.
+      skip_waiting_for_build_processing: true
+    )
+  end
+end

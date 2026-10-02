@@ -1,0 +1,40 @@
+name: Prune CI dev certificates
+
+# Each cloud-signed iOS archive on a fresh runner mints a "Created via API" Apple
+# Development certificate whose private key dies with the runner. After enough builds
+# the team hits its cap and the archive fails with "Your account has reached the
+# maximum number of certificates" (v1.0.5, 22 September 2026). This revokes only those
+# throwaways -- never a Distribution cert, never one a person made -- and lists them
+# first by default. scripts/prune-dev-certs.mjs holds the filter.
+
+on:
+  workflow_dispatch:
+    inputs:
+      revoke:
+        description: "Actually revoke. Leave off to only list what would be revoked."
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  prune:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22.13'
+      - name: List, and revoke if asked
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          if [ "${{ inputs.revoke }}" = "true" ]; then
+            node scripts/prune-dev-certs.mjs --revoke
+          else
+            node scripts/prune-dev-certs.mjs
+          fi

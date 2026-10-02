@@ -1,0 +1,590 @@
+rules_version = '2';
+
+// Geneva Tennis — consent + monitoring enforcement.
+// This file IS the security model. The app UI mirrors it; it does not implement it.
+// Cloud Functions need the Blaze plan, so there is no server-side code to fall back on.
+//
+// Governing principle: the coach is the MONITORED party. A coach is trusted with content
+// and scheduling, and deliberately not trusted with consent or with deciding who
+// watches them. Those two powers belong to the guardian (for an adult player, the
+// player themself) and to no one else.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() { return request.auth != null; }
+
+    // The coach role is a DOCUMENT, not a constant. A team has a head coach and an
+    // assistant, so there can be more than one, and the role has to be claimable without
+    // redeploying these rules. /coaches/{uid} existing is what makes that account a coach.
+    // A role field on /users would be something a client could try to escalate; this is
+    // only reachable through the claim below, which needs the team's coach code.
+    // A UID (not an email) keys it deliberately — it carries no verification caveat.
+    function isCoach() {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/coaches/$(request.auth.uid));
+    }
+
+    function athleteDoc(aid) {
+      return get(/databases/$(database)/documents/athletes/$(aid)).data;
+    }
+    function isGuardian(aid) { return isSignedIn() && athleteDoc(aid).guardianUid == request.auth.uid; }
+    function isPlayer(aid)   { return isSignedIn() && athleteDoc(aid).playerUid   == request.auth.uid; }
+
+    // Absent field and explicit null both mean "no consent". Reading a missing key
+    // errors out in rules, so the `in` check has to come first.
+    function consentOn(a) { return 'consentGrantedAt' in a && a.consentGrantedAt != null; }
+
+    // A family member attaching their own account to the slot the coach invited by
+    // email. Used by /athletes update; see the comment there for why each term exists.
+    function claimsSlot(uidField, emailField) {
+      return isSignedIn()
+        && request.auth.token.email_verified == true
+        && changed().hasOnly([uidField])
+        && emailField in resource.data
+        && resource.data[emailField] == request.auth.token.email
+        && resource.data[uidField] == ''
+        && request.resource.data[uidField] == request.auth.uid;
+    }
+
+    function changed() { return request.resource.data.diff(resource.data).affectedKeys(); }
+
+    // --- the audience of a shared calendar event ---------------------------
+    //
+    // Every athlete on a session must have their guardian in memberUids, and their
+    // own login too where they have one. Without this the coach could quietly leave
+    // a parent off a session he runs with her child, which is the same power the
+    // audit already took away from him on threads.
+    //
+    // A guardian who has not signed up yet has uid , and  must never satisfy a
+    // membership test: that is the exact bug the thread rule was fixed for. So a
+    // session cannot be SHARED with a family before they have an account. Give them
+    // an individual session instead, whose athleteId branch on read resolves through
+    // a get() and starts working the moment they claim their slot.
+    function athleteAudienceOk(aid, members) {
+      let a = athleteDoc(aid);
+      return a.guardianUid != ''
+        && a.guardianUid in members
+        && (!('playerUid' in a) || a.playerUid == '' || a.playerUid in members);
+    }
+
+    // Rules have no loops, so the list is unrolled to a fixed ceiling. Each term
+    // short-circuits past the end of the list WITHOUT spending a document get, so a
+    // two-athlete session costs two gets and not eight. That ceiling is also why
+    // src/data.ts writes these one at a time rather than in a batch: a batched write
+    // shares ONE document-access budget across every document in it.
+    function idxAudienceOk(ids, members, i) {
+      return ids.size() <= i || athleteAudienceOk(ids[i], members);
+    }
+
+    function audienceWritten(d) {
+      return !('athleteIds' in d) || (
+        d.athleteIds is list
+        && d.athleteIds.size() >= 1
+        && d.athleteIds.size() <= 8
+        && d.memberUids is list
+        && d.athleteId in d.athleteIds
+        && idxAudienceOk(d.athleteIds, d.memberUids, 0)
+        && idxAudienceOk(d.athleteIds, d.memberUids, 1)
+        && idxAudienceOk(d.athleteIds, d.memberUids, 2)
+        && idxAudienceOk(d.athleteIds, d.memberUids, 3)
+        && idxAudienceOk(d.athleteIds, d.memberUids, 4)
+        && idxAudienceOk(d.athleteIds, d.memberUids, 5)
+        && idxAudienceOk(d.athleteIds, d.memberUids, 6)
+        && idxAudienceOk(d.athleteIds, d.memberUids, 7)
+      );
+    }
+
+    // --- the categories a workout covers -----------------------------------
+    //
+    // One session is often two things at once, footwork and serving, so `types`
+    // carries the whole set. `type` is unchanged: it stays the primary category, it is
+    // what every document written before this carries, and nothing here touches it.
+    //
+    // Bounded for the same reason the template's blocks list is: a field the coach
+    // writes freely is a field that can be used as storage. Every member has to be a
+    // category the app actually draws, because an unknown key renders as a blank chip
+    // on a family's calendar. Six categories exist, so six is the ceiling.
+    function typesOk(d) {
+      return !('types' in d) || (
+        d.types is list
+        && d.types.size() >= 1
+        && d.types.size() <= 6
+        && d.types.hasOnly(['skills', 'shoot', 'handle', 'cond', 'team', 'rest'])
+      );
+    }
+
+    // ---------------------------------------------------------------
+    // Coaches — the role, and the one door into it
+    // ---------------------------------------------------------------
+    //
+    // A signed-in, email-VERIFIED account becomes a coach by writing two documents in
+    // ONE batch: /coachClaims/{uid}, carrying the team's coach code, and /coaches/{uid}.
+    // The code itself is never stored here: /config/coachCode holds only its SHA-256, no
+    // client can read that document (these rules read it on their own behalf), and a
+    // wrong code makes the claim write fail. The /coaches create then fails with it,
+    // because it demands that the claim exist AFTER the same batch.
+    //
+    // Hashing, per the rules reference: hashing.sha256(string) hashes the UTF-8 bytes and
+    // returns Bytes; Bytes.toHexString() is UPPERCASE hex; String.lower() folds it, so the
+    // stored digest is lowercase hex (scripts/set-coach-code.mjs writes it that way).
+    //
+    // The code is a shared secret and a rules-evaluated guess has no rate limit, so make
+    // it long and random. config/coachCode missing means get() fails and nobody can claim.
+    match /coaches/{uid} {
+      allow read: if isSignedIn();
+
+      allow create: if isSignedIn()
+        && request.auth.uid == uid
+        && request.auth.token.email_verified == true
+        && request.resource.data.keys().hasOnly(['name', 'email', 'createdAt'])
+        && request.resource.data.name is string
+        && request.resource.data.name.size() <= 60
+        && existsAfter(/databases/$(database)/documents/coachClaims/$(uid));
+
+      // A coach may rename themselves and nothing else, and not past the same bound.
+      allow update: if isSignedIn()
+        && request.auth.uid == uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name'])
+        && request.resource.data.name is string
+        && request.resource.data.name.size() <= 60;
+
+      allow delete: if false;
+    }
+
+    match /coachClaims/{uid} {
+      allow read: if false;
+
+      allow create: if isSignedIn()
+        && request.auth.uid == uid
+        && request.auth.token.email_verified == true
+        && request.resource.data.keys().hasOnly(['key'])
+        && request.resource.data.key is string
+        && request.resource.data.key.size() == 64
+        && exists(/databases/$(database)/documents/coachKeys/$(request.resource.data.key));
+
+      allow update, delete: if false;
+    }
+
+    // Written by scripts/set-coach-code.mjs with an admin credential, which bypasses
+    // these rules. No client reads it and no client writes it.
+    match /config/{doc} {
+      allow read, write: if false;
+    }
+
+    // One document per valid coach code, named by the code's SHA-256 (lowercase hex). Written
+    // only by scripts/set-coach-code.mjs with admin credentials. Unreadable and unlistable, so
+    // the only way to use one is to already know the code that hashes to it. The digest is
+    // computed in the app (src/sha256.ts), which keeps hashing out of the rules entirely.
+    match /coachKeys/{key} {
+      allow read, write: if false;
+    }
+
+    // ---------------------------------------------------------------
+    // Athletes — the consent record itself
+    // ---------------------------------------------------------------
+    match /athletes/{aid} {
+      // An invited family member has no uid on the record yet, so they cannot be
+      // recognised the usual way. They may read the ONE record that names their own
+      // verified email address, which is how the app finds the slot to claim.
+      // `in` first: reading a key that is not there is an error, not a false.
+      function invitedHere() {
+        return isSignedIn() && request.auth.token.email_verified == true
+          && (('guardianEmail' in resource.data
+                && resource.data.guardianEmail == request.auth.token.email)
+              || ('playerEmail' in resource.data
+                && resource.data.playerEmail == request.auth.token.email));
+      }
+
+      allow read: if isCoach()
+                  || resource.data.guardianUid == request.auth.uid
+                  || resource.data.playerUid   == request.auth.uid
+                  || invitedHere();
+
+      // AUDIT FIX (major): create previously had no validation, so the coach could
+      // create an athlete with consentGrantedAt already set — pre-granting the
+      // parent's consent at the one moment the update rule wasn't watching.
+      // create and update now agree: consent is never coach-writable, ever.
+      allow create: if isCoach()
+        && request.resource.data.guardianUid is string
+        && request.resource.data.playerUid is string
+        && !('consentGrantedAt' in request.resource.data)
+        // An adult player (18+) is invited with no guardian: both slots carry the
+        // player's own name and address, and they claim both. The flag is a hint for
+        // the screens and carries no authority of its own (the uids do), so it is only
+        // type-checked.
+        && (!('adult' in request.resource.data) || request.resource.data.adult is bool);
+
+      allow delete: if isCoach();
+
+      // The guardian owns consent and touches nothing else.
+      // The coach owns everything else and can never grant consent on a parent's
+      // behalf — that separation is the whole point, so it is enforced both ways.
+      // AUDIT FIX (minor, found by firebase/test/rules.test.mjs): reading
+      // request.resource.data.consentGrantedAt threw when the guardian revoked by
+      // DELETING the field rather than nulling it — rules error out on a missing key,
+      // so a perfectly ordinary deleteField() revoke came back as an opaque
+      // PERMISSION_DENIED. The read side (consentOn) already treated absent and null
+      // alike; now the write side agrees. This narrows nothing: hasOnly still pins
+      // which key moved, and an absent field means no consent, which is the safe
+      // direction.
+      allow update: if
+        (resource.data.guardianUid == request.auth.uid
+          && changed().hasOnly(['consentGrantedAt'])
+          && (!('consentGrantedAt' in request.resource.data)
+              || request.resource.data.consentGrantedAt == null
+              || request.resource.data.consentGrantedAt is timestamp))
+        ||
+        (isCoach()
+          && !changed().hasAny(['consentGrantedAt', 'guardianUid', 'playerUid']))
+        ||
+        // Claiming an invited slot. This is the ONLY path by which a non-coach writes
+        // a uid onto an athlete record, and it is deliberately narrow:
+        //   - the email must be VERIFIED. Without that, anyone who knows a client's
+        //     address could claim their slot before they do and read a minor's
+        //     messages. Verification is the whole security of this branch.
+        //   - the slot must be empty. A claimed slot can never be reassigned by a
+        //     client, only by the coach clearing it first, so a claim cannot be stolen.
+        //   - the uid written must be the caller's own.
+        //   - nothing else may change in the same write.
+        (claimsSlot('guardianUid', 'guardianEmail') || claimsSlot('playerUid', 'playerEmail'));
+    }
+
+    // ---------------------------------------------------------------
+    // Threads + messages
+    // ---------------------------------------------------------------
+    match /threads/{tid} {
+
+      function guardianOf(aid) { return athleteDoc(aid).guardianUid; }
+
+      // participants may post. readers may only read.
+      // The parent sits in `readers` on the coach<->player thread: full visibility,
+      // no ability to post as or into it. This is the monitoring guarantee.
+      allow read: if isCoach()
+                  || request.auth.uid in resource.data.readers
+                  || request.auth.uid in resource.data.participants;
+
+      // AUDIT FIX (major): the coach previously controlled `readers` freely, which
+      // let the monitored party quietly write the guardian out of the audience —
+      // and delete the thread outright. The guardian is now structurally
+      // unremovable, and threads are permanent.
+      // AUDIT FIX (major, found by firebase/test/rules.test.mjs): the guardian check was
+      // satisfied vacuously by the empty string. Before a family signs up, guardianUid
+      // is '', so creating a thread with '' in readers PASSED — and because threads are
+      // immutable, the real guardian could then never be added. Opening threads early
+      // was a complete bypass of the monitoring guarantee. A guardian who has not
+      // claimed her account cannot yet be a reader, so the thread has to wait.
+      allow create: if isCoach()
+        && request.resource.data.athleteId is string
+        && request.resource.data.participants is list
+        && request.resource.data.readers is list
+        && guardianOf(request.resource.data.athleteId) != ''
+        && (guardianOf(request.resource.data.athleteId) in request.resource.data.readers
+            || guardianOf(request.resource.data.athleteId) in request.resource.data.participants);
+
+      // ponytail: threads are created once and never edited. Add an update rule
+      // the day a real need appears, not before.
+      allow update, delete: if false;
+
+      match /messages/{mid} {
+
+        function thread() { return get(/databases/$(database)/documents/threads/$(tid)).data; }
+
+        function canRead() {
+          let t = thread();
+          return isCoach()
+              || request.auth.uid in t.readers
+              || request.auth.uid in t.participants;
+        }
+
+        // AUDIT FIX (major, broken business logic): the consent gate used to apply
+        // to every non-coach sender, which locked the PARENT out of messaging the
+        // coach until she had granted consent — but talking to him is how she
+        // decides. Consent gates the athlete's messaging and nothing else.
+        function canSend() {
+          let t = thread();
+          let a = athleteDoc(t.athleteId);
+          return request.auth.uid in t.participants
+              && (request.auth.uid != a.playerUid || consentOn(a));
+        }
+
+        allow read: if isSignedIn() && canRead();
+
+        allow create: if isSignedIn()
+          && canSend()
+          && request.resource.data.keys().hasOnly(['senderUid', 'text', 'createdAt'])
+          && request.resource.data.senderUid == request.auth.uid
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() <= 4000
+          && request.resource.data.createdAt == request.time;
+
+        // Messages are the monitoring record. If a player could delete one, the
+        // parent-visibility guarantee would be worth nothing. This binds the coach
+        // too — he does not get to edit the record of what he said to a minor.
+        allow update, delete: if false;
+      }
+    }
+
+    // ---------------------------------------------------------------
+    // Calendar
+    // ---------------------------------------------------------------
+    // NOTE: `read` covers list queries, and rules never filter — the client must
+    // query in a shape the rule can satisfy for EVERY document it could return, or
+    // the whole query is denied. src/data.ts runs two: one on athleteId, one on
+    // memberUids, which are the two branches below.
+    //
+    // A coached session is ONE document shared by several athletes, not a copy per
+    // athlete, so "who may read this" cannot be derived from a single athleteId any
+    // more. `memberUids` carries the answer directly, which makes a read cost no
+    // document gets at all — and which means the COACH writes the audience for his
+    // own session. He is the monitored party here, so the write rule does not take
+    // his word for it: see audienceOk below.
+    match /events/{eid} {
+      allow read: if isCoach()
+                  // The shared branch. Covers every athlete on a coached session.
+                  || ('memberUids' in resource.data
+                      && request.auth.uid in resource.data.memberUids)
+                  // The original branch, and not merely for old documents: it
+                  // resolves through a get() at READ time, so a family that signs up
+                  // AFTER a session was scheduled can still see it. memberUids is a
+                  // snapshot and cannot do that on its own.
+                  || isGuardian(resource.data.athleteId)
+                  || isPlayer(resource.data.athleteId);
+
+      // Nothing below applies to an event with no athleteIds, so every event written
+      // before coached sessions were shared keeps working exactly as it did.
+      allow create, update: if isCoach()
+        && audienceWritten(request.resource.data)
+        && typesOk(request.resource.data);
+      allow delete: if isCoach();
+    }
+
+    // ---------------------------------------------------------------
+    // The Locker — coach-published HTML workflows
+    // ---------------------------------------------------------------
+    match /workflows/{wid} {
+      // OPEN ITEM (see audit finding #4): any signed-in account can read every
+      // workflow. That is training content, not PII or child-safety data, but it
+      // is the coach's own material. Closing it needs a membership record, which is a
+      // signup-flow decision — flagged rather than guessed at.
+      allow read: if isSignedIn();
+
+      // ponytail: Firestore's hard document ceiling is 1 MiB and the existing Locker
+      // templates file is already 983 KB. Reject at 900 KB so the failure is a clear
+      // rule denial rather than an opaque write error. Chunk it the day that bites.
+      allow create, update: if isCoach()
+        && request.resource.data.html is string
+        && request.resource.data.html.size() <= 900000;
+      allow delete: if isCoach();
+    }
+
+    // An athlete's own filled-in answers — never a second copy of the coach's HTML.
+    //
+    // The document id is `{workflowId}` for a one-off and `{workflowId}__{periodKey}`
+    // for anything the agreement asks for on a cadence (weekly game evaluations,
+    // quarterly reports, the per-session journal). One document per workflow would make
+    // each week's evaluation overwrite the last, destroying the record it exists to
+    // create. workflowId and periodKey are carried as fields too so a submission can be
+    // listed without parsing its id.
+    match /athletes/{aid}/savedWorkflows/{sid} {
+      // The guardian reads these for the same reason she reads every message in the
+      // coach<->athlete thread: without it, a form the coach assigns a minor and reads
+      // back is an unmonitored channel. The athlete is told this in the UI.
+      allow read: if isCoach() || isGuardian(aid) || isPlayer(aid);
+
+      // The coach reads progress but does not author it. Answers stay the athlete's.
+      // Bounded so a client cannot use its own progress doc as free storage.
+      allow create, update: if (isGuardian(aid) || isPlayer(aid))
+        && request.resource.data.keys().hasOnly(['answers', 'updatedAt', 'workflowId', 'periodKey'])
+        && request.resource.data.answers is map
+        && request.resource.data.answers.size() <= 200
+        // Pin the submission to the document it claims to be, so a client cannot file a
+        // week's evaluation under another week and rewrite history.
+        && (!('workflowId' in request.resource.data)
+            || sid == request.resource.data.workflowId
+            || sid == request.resource.data.workflowId + '__' + request.resource.data.periodKey);
+      allow delete: if isGuardian(aid) || isPlayer(aid);
+    }
+
+    // ---------------------------------------------------------------
+    // The workout log — what the athlete actually DID
+    // ---------------------------------------------------------------
+    //
+    // The reward counters on /users are a PRIVATE scoreboard: nobody else reads them and
+    // the rule there deliberately does not police whether they are honest. Completion is
+    // a different thing, because the coach trains on it, so it is recorded here instead.
+    //
+    // This is a SELF-REPORT, exactly like a saved workflow, and it deliberately carries
+    // the same three identities as the block above rather than inventing a second shape:
+    // the coach reads, the family writes its own. An athlete can therefore log a workout
+    // he did not do, the same way he can type anything into a worksheet. What the rule
+    // guarantees is narrower and worth stating plainly: only that family can write it,
+    // only these fields, and the timestamp is the server's.
+    //
+    // The document id is the EVENT id. That makes a second Finish idempotent instead of
+    // a duplicate, and makes "did they do Tuesday" a single document read. A coached
+    // session is ONE shared /events row for up to eight athletes, so per-athlete
+    // completion has to live under the athlete; putting it on the event would make the
+    // coach's own schedule row family-writable and spend a get per athlete on every tap.
+    match /athletes/{aid}/workoutLog/{eid} {
+      allow read: if isCoach() || isGuardian(aid) || isPlayer(aid);
+
+      allow create, update: if (isGuardian(aid) || isPlayer(aid))
+        && request.resource.data.keys().hasOnly(
+             ['eventId', 'name', 'completedAt', 'minutes', 'blocksDone', 'blocksTotal'])
+        // Pin the row to the session it claims to be, so one workout cannot be filed
+        // under another session's id.
+        && request.resource.data.eventId == eid
+        && request.resource.data.name is string
+        && request.resource.data.name.size() <= 140
+        && request.resource.data.minutes is int
+        && request.resource.data.minutes >= 0
+        && request.resource.data.minutes <= 600
+        && request.resource.data.blocksDone is int
+        && request.resource.data.blocksDone >= 0
+        && request.resource.data.blocksDone <= 60
+        && request.resource.data.blocksTotal is int
+        && request.resource.data.blocksTotal >= 0
+        && request.resource.data.blocksTotal <= 60
+        // Same guard the messages rule uses: the clock is the server's, so a log cannot
+        // be backdated into a week the athlete did not train.
+        && request.resource.data.completedAt == request.time;
+
+      allow delete: if isGuardian(aid) || isPlayer(aid);
+    }
+
+    // ---------------------------------------------------------------
+    // Workout templates — the Workout Builder library
+    // ---------------------------------------------------------------
+    // Coach-only in BOTH directions, unlike /workflows. A template is the coach's
+    // working material, not something a family is meant to browse: what an athlete
+    // needs to see is the session on their own calendar, and scheduling copies the
+    // blocks onto that event rather than pointing at this document. So there is no
+    // reason for a family to read here, and a read they do not need is a read that
+    // can leak another family's plan.
+    match /workoutTemplates/{wid} {
+      allow read: if isCoach();
+
+      // Bounded so a client cannot use the template library as free storage. 60
+      // blocks is about four hours at five minutes each, well past any real session.
+      allow create, update: if isCoach()
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 120
+        && request.resource.data.blocks is list
+        && request.resource.data.blocks.size() <= 60
+        && typesOk(request.resource.data);
+
+      allow delete: if isCoach();
+    }
+
+    // ---------------------------------------------------------------
+    // Private per-user preferences (notification mutes)
+    // ---------------------------------------------------------------
+    // The spec gives the guardian a per-thread mute the player cannot override.
+    // Threads are immutable (`allow update: if false`) and the guardian's write on
+    // /athletes is narrowed to consentGrantedAt, so there was nowhere to put it.
+    // A mute is a preference, not a shared record, so it belongs to the one account
+    // it affects: a player cannot clear a mute his guardian set because it does not
+    // live in any document he can write.
+    match /users/{uid} {
+      allow read, delete: if isSignedIn() && request.auth.uid == uid;
+      // The chat colour and the reward counters live here too. They are private to
+      // this one account, nothing else reads through them, and no privilege anywhere
+      // derives from them — so the rule bounds the SIZE of what can be stored rather
+      // than policing whether an athlete's own scoreboard is honest.
+      allow create, update: if isSignedIn() && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly([
+             'mutedThreads', 'displayName', 'chatColor', 'celebration',
+             'streak', 'bestStreak', 'lastDay', 'workouts', 'doneEvents', 'remind'
+           ])
+        && request.resource.data.mutedThreads is list
+        && request.resource.data.mutedThreads.size() <= 200
+        && (!('doneEvents' in request.resource.data)
+            || (request.resource.data.doneEvents is list
+                && request.resource.data.doneEvents.size() <= 60))
+        && (!('chatColor' in request.resource.data)
+            || (request.resource.data.chatColor is string
+                && request.resource.data.chatColor.size() <= 24))
+        && (!('celebration' in request.resource.data)
+            || (request.resource.data.celebration is string
+                && request.resource.data.celebration.size() <= 24))
+        && (!('lastDay' in request.resource.data)
+            || (request.resource.data.lastDay is string
+                && request.resource.data.lastDay.size() <= 10));
+    }
+
+    // ---------------------------------------------------------------
+    // Matches — live charting (docs/MATCH-DATA.md)
+    // ---------------------------------------------------------------
+    // A match is TEAM data, not one family's: a student charts it from the fence, the
+    // coach reads it, a teammate's parent follows it live. So reads and writes go to
+    // roster MEMBERS, and a member is an account with /members/{uid}. The app writes that
+    // document itself the first time the account's athlete record resolves (src/matches.ts
+    // ensureMember), and the create rule checks it against that athlete record, so the
+    // only way in is to be named on the roster.
+    function isMember() {
+      return isSignedIn() && exists(/databases/$(database)/documents/members/$(request.auth.uid));
+    }
+
+    match /members/{uid} {
+      allow create: if isSignedIn() && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['athleteId', 'joinedAt'])
+        && (get(/databases/$(database)/documents/athletes/$(request.resource.data.athleteId)).data.playerUid == uid
+            || get(/databases/$(database)/documents/athletes/$(request.resource.data.athleteId)).data.guardianUid == uid);
+      allow read: if request.auth.uid == uid || isCoach();
+      // Create-only: a member cannot repoint their own record at a different athlete.
+      // Taking someone off the team is the coach's call.
+      allow update: if false;
+      allow delete: if isCoach();
+    }
+
+    match /matches/{mid} {
+      allow read: if isCoach() || isMember();
+      allow create: if (isCoach() || isMember())
+        && request.resource.data.createdBy == request.auth.uid;
+      // Every member may sync points into any match: whoever holds the phone on the
+      // fence is charting. Who created it is fixed, because it decides who may delete it.
+      allow update: if (isCoach() || isMember())
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['createdBy']);
+      allow delete: if isCoach() || resource.data.createdBy == request.auth.uid;
+
+      match /points/{pid} {
+        allow read: if isCoach() || isMember();
+        // Bounded so the point log cannot be used as free storage. The tracker numbers
+        // points from 1, and no match reaches 2000.
+        allow create, update: if (isCoach() || isMember())
+          && request.resource.data.n is int
+          && request.resource.data.n >= 1
+          && request.resource.data.n <= 2000;
+        // An undone point is deleted by whoever is charting.
+        allow delete: if isCoach() || isMember();
+      }
+
+      match /clips/{cid} {
+        allow read: if isCoach() || isMember();
+        // Pose keyframes as a JSON string, never video. The app stops at 180 000
+        // characters; the gap to this ceiling is headroom, not an invitation.
+        allow create: if (isCoach() || isMember())
+          && request.resource.data.frames is string
+          && request.resource.data.frames.size() < 190000;
+        allow delete: if isCoach() || resource.data.createdBy == request.auth.uid;
+      }
+    }
+
+    // team/settings: the Google Sheets connector and the address a student's "Email
+    // stats" goes to. Members read it because their phones push to the sheet; only a
+    // coach decides where the team's data goes.
+    match /team/{doc} {
+      allow read: if isCoach() || isMember();
+      allow write: if isCoach();
+    }
+
+    // Deny-by-default is already Firestore's behaviour; this is documentation, not a
+    // backstop. Rules OR together, so this can never revoke an allow written above.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
