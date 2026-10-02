@@ -51,7 +51,8 @@ jobs:
           if gh run list --workflow ios-testflight.yml --limit 5 --json status --jq '.[] | select(.status != "completed") | .status' | grep -q .; then
             echo "An iOS TestFlight run is already in progress."; exit 0
           fi
-          gh workflow run ios-testflight.yml --ref "${{ github.event.repository.default_branch }}"
+          # A scheduled run carries no repository payload, so name the branch outright.
+          gh workflow run ios-testflight.yml --ref main
           echo "## Started the first TestFlight build" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Retire this watcher
