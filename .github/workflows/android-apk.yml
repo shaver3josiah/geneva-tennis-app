@@ -23,7 +23,10 @@ env:
   # production stays a human step in the console, because Play refuses a first
   # production release until Data Safety, the content rating and the target-audience
   # questionnaire are filled in, and no API fills those.
-  PLAY_TRACK: ${{ inputs.play_track || 'internal' }}
+  # Geneva Tennis has no Play Console listing yet, so a tag builds the sideload .apk and the
+  # GitHub Release only. Once the listing exists, dispatch with play_track=internal (or change
+  # this default back to 'internal') and the .aab is built, signed and uploaded as before.
+  PLAY_TRACK: ${{ inputs.play_track || 'none' }}
 
 permissions:
   # Needed only so the tag build can attach the .apk to a GitHub Release.
@@ -151,6 +154,12 @@ jobs:
 
           grep -nE "^[[:space:]]*version(Code|Name) " "$G"
 
+          # The template's 2 GB daemon heap is tight for a release package with native libs
+          # for several ABIs. The runner has 16 GB; a later key in a .properties file wins.
+          echo "" >> android/gradle.properties
+          echo "org.gradle.jvmargs=-Xmx6g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8" >> android/gradle.properties
+          grep -n "org.gradle.jvmargs" android/gradle.properties
+
       # Gradle's assembleRelease runs Metro itself -- do NOT `expo export` first.
       #
       # ABIs are the whole build time. Measured on run 34992708992: assembleRelease was
@@ -187,7 +196,10 @@ jobs:
       - name: Assemble release
         working-directory: android
         env:
-          ABIS: ${{ inputs.architectures || 'armeabi-v7a,arm64-v8a,x86,x86_64' }}
+          # Real phones only: 64-bit ARM (every phone since ~2015) and 32-bit ARM (older ones).
+          # The four-ABI build failed in packageRelease (v1.0.0, run 36973700093) after 22
+          # minutes; the x86 pair is emulator-only and half the APK's size.
+          ABIS: ${{ inputs.architectures || 'arm64-v8a,armeabi-v7a' }}
         run: |
           set -euo pipefail
           echo "building for: $ABIS"
