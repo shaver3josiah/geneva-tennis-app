@@ -93,189 +93,153 @@ fix a worksheet later without waiting for an app release.
 
 Open Gemini, paste one of these, and it writes the file. Then tell it to give you the
 result as a downloadable `.html` file, or copy what it prints into Notepad and save it as
-`free-throws.html` (make sure it ends in `.html`, not `.txt`).
+`serve-targets.html` (make sure it ends in `.html`, not `.txt`).
 
 If the first answer is not right, say what is wrong in plain words and ask it to try
 again. It keeps the rules from the prompt.
 
-### 1. Free-throw routine
+Every prompt ends with the same STYLE block, which matches the app: Geneva gold, charcoal,
+cream.
+
+### 1. Serve targets
 
 ```
-Write me a single self-contained HTML file. It is a basketball free-throw worksheet for
-a youth training app called Geneva Tennis. All CSS and JavaScript must be inline in
-that one file. No images, no fonts, no libraries, nothing loaded from the internet. It
-must open correctly by double-clicking it in Chrome.
+Write me a single self-contained HTML file. It is a tennis serve-practice worksheet for a
+college team app called Geneva Tennis. All CSS and JavaScript must be inline in that one
+file. No images, no fonts, no libraries, nothing loaded from the internet. It must open
+correctly by double-clicking it in Chrome.
 
 WHAT IT DOES
-Ten rounds of ten free throws. For each round the athlete taps a Made button or a Missed
-button, one tap per real serve on a real court. Show which round they are on, the makes in
-the current round, the running total out of 100, and the percentage. Show their longest
-streak of makes. Include an Undo button for a mis-tap. Include a notes box at the bottom
-asking where the misses went: short, long, left or right.
+Six targets: Wide, Body and T, on the deuce side and on the ad side. For each target the
+player hits ten real serves and taps In or Out once per serve. Show the count for the
+current target, the in-percentage per target, the totals for first-serve practice, and the
+best and worst target. Include an Undo button for a mis-tap and a notes box asking where the
+misses went: net, long, or wide.
 
 THE HARD RULE
-Nothing in this page may be earnable without actually training. No aiming, no power
-meter, no timing bar, no points for tapping, no game of skill of any kind. The athlete
-is standing at a line logging shots they really took. Anything winnable on the couch
-rewards the opposite of what this business sells.
+Nothing in this page may be earnable without actually training. No aiming game, no power
+meter, no timing bar, no points for tapping. The player is standing on a real court logging
+serves they really hit. Anything winnable on the couch rewards the opposite of training.
 
 SAVING (this is the only technical contract)
 Every value that should be saved must be on an element carrying a data-k attribute, for
-example <input type="number" data-k="ft_made_1">. Use hidden inputs with data-k to store
+example <input type="hidden" data-k="deuce_t_in">. Use hidden inputs with data-k to store
 counts the page works out itself. Do not use radio buttons, they save incorrectly here.
 The host app writes saved values back into those elements and then fires a single
 "change" event on the document, so the page must listen for "change" on the document and
-redraw its totals from the input values, otherwise a returning athlete sees a zero total
-over restored numbers. The page must not contain any saving code of its own.
+redraw its totals from the input values. The page must not contain any saving code of its own.
 
 STYLE
-Dark. Page background #08080C, body text #E8E8EE, cards #131318 with a 1px border of
-rgba(255,255,255,.10) and 12px corners. Brand red #E60C20 for the primary button, #FF3A41
-for small red labels, muted text #9C9CA9, a highlight yellow #FFD34D for the current cue.
-System font stack, 15px base, content capped at 430px wide and centred. Built for a phone
-held in one hand. The Made button at least 60px tall, everything else tappable at least
-44px. Every button and every state carries a word or an icon, never colour alone, because
-roughly 8 in 100 boys are red-green colourblind.
+Dark. Page background #0B0B0D, body text #F4F1EA, cards #1C1C20 with a 1px border of
+rgba(255,255,255,.10) and 12px corners. Geneva gold #C99A2C for the primary button with
+#0B0B0D text on it (never white text on gold), #DAAF48 for small gold labels, muted text
+#9C9CA9, optic yellow #DDF54A for the current target. System font stack, 15px base, content
+capped at 430px wide and centred. Built for a phone held in one hand: the In and Out buttons
+at least 60px tall, everything else at least 44px. Every button and state carries a word,
+never colour alone.
 
 COPY
-Plain, short sentences in a coach's voice. No em-dashes anywhere. No exclamation marks.
+Plain, short sentences in a coach's voice. No em-dashes. No exclamation marks.
 ```
 
-### 2. Ball-handling circuit
+### 2. Footwork and split-step circuit
 
 ```
-Write me a single self-contained HTML file. It is a basketball ball-handling worksheet
-for a youth training app called Geneva Tennis. All CSS and JavaScript inline in that
-one file. No images, no fonts, no libraries, nothing loaded from the internet. It must
-open correctly by double-clicking it in Chrome.
+Write me a single self-contained HTML file. It is a tennis footwork worksheet for a college
+team app called Geneva Tennis. All CSS and JavaScript inline in that one file. No images, no
+fonts, no libraries, nothing loaded from the internet. It must open correctly by
+double-clicking it in Chrome.
 
 WHAT IT DOES
-A circuit of eight stationary and on-the-move handling drills: two-ball pound, figure
-eights, cone weave left hand only, snatch-backs, hesitation into pull-up, full-court
-change of pace, and two more you choose. Each drill is a row with its name, the
-prescribed sets and reps, and a tick box the athlete taps when that drill is genuinely
-done. Include a real stopwatch showing elapsed minutes for the whole circuit, started by
-a Start button. At the bottom, a 1 to 10 box for how the hands felt and a notes box for
-which hand was worse today.
+A circuit of eight footwork drills: split-step on the feed, spider drill, crossover recovery,
+shuffle to the alley and back, drop-step to the backhand, approach and split, figure eights
+around two balls, and the hexagon jump. Each drill is a row with its name, the prescribed
+sets and reps, and a tick box the player taps when that drill is genuinely done. Include a
+real stopwatch showing elapsed minutes for the whole circuit, started by a Start button. At
+the bottom, a 1 to 10 box for how the legs felt and a notes box for which direction was slow.
 
 THE HARD RULE
-Nothing in this page may be earnable without actually training. No aiming, no power
-meter, no timing minigame, no points for tapping. The tick boxes record work done at a
-court. The clock is real elapsed time, not a countdown the athlete can win. Anything
-winnable on the couch rewards the opposite of what this business sells.
+Nothing in this page may be earnable without actually training. No timing minigame, no
+points for tapping. The tick boxes record work done on a court; the clock is real elapsed time.
 
 SAVING (this is the only technical contract)
 Every value that should be saved must be on an element carrying a data-k attribute, for
-example <input type="checkbox" data-k="drill_pound">. Use hidden inputs with data-k for
-anything the page calculates, such as elapsed minutes. Do not use radio buttons, they
-save incorrectly here. The host app writes saved values back into those elements and then
-fires a single "change" event on the document, so the page must listen for "change" on
-the document and redraw its progress from the inputs, otherwise a returning athlete sees
-their ticks restored but the progress line still reading zero. The page must not contain
-any saving code of its own.
+example <input type="checkbox" data-k="drill_spider">. Use hidden inputs with data-k for
+anything the page calculates, such as elapsed minutes. Do not use radio buttons. The host
+app writes saved values back and then fires one "change" event on the document, so the page
+must redraw its progress from the inputs on that event. No saving code of its own.
 
 STYLE
-Dark. Page background #08080C, body text #E8E8EE, cards #131318 with a 1px border of
-rgba(255,255,255,.10) and 12px corners. Brand red #E60C20 for the primary button, #FF3A41
-for small red labels, muted text #9C9CA9, highlight yellow #FFD34D. System font stack,
-15px base, content capped at 430px wide and centred. Phone first. Every tap target at
-least 44px tall. A completed drill shows a tick and struck-through text, not just a
-colour change, because roughly 8 in 100 boys are red-green colourblind.
+(paste the same STYLE block as prompt 1, with "the current drill" in optic yellow)
 
 COPY
-Plain, short sentences in a coach's voice. No em-dashes anywhere. No exclamation marks.
+Plain, short sentences in a coach's voice. No em-dashes. No exclamation marks.
 ```
 
-### 3. Film study sheet
+### 3. Match reflection
 
 ```
-Write me a single self-contained HTML file. It is a film study worksheet for a youth
-basketball training app called Geneva Tennis. All CSS and JavaScript inline in that one
+Write me a single self-contained HTML file. It is a post-match reflection worksheet for a
+college tennis team app called Geneva Tennis. All CSS and JavaScript inline in that one
 file. No images, no fonts, no libraries, nothing loaded from the internet. It must open
 correctly by double-clicking it in Chrome.
 
 WHAT IT DOES
-The athlete watches one of their own games back and writes what they saw. Fields: who
-they played, the date, and the minutes they played. Then five short writing boxes: three
-possessions where the read was right, three where it was wrong, what the defence was
-doing to them, one habit they can see on tape that they cannot feel on the floor, and one
-thing to fix before the next game. Add a short checklist of things to watch for
-specifically: first three steps after a pass, where their eyes are on the catch, closing
-out under control, talking on defence. Keep the whole sheet to one screen of scrolling on
-a phone.
+The player writes about a match they just played. Fields: opponent, school, date, score.
+Then five short writing boxes: what the opponent did on big points, the pattern that won me
+the most points, the pattern that lost me the most, what I did between points when I was
+behind, and one thing to practise before the next match. Add a checklist: I used my
+between-point routine, I knew the score before every point, I committed to my targets on
+break points, I reset after errors. Keep it to one screen of scrolling on a phone.
 
 THE HARD RULE
-Nothing in this page may be earnable without actually doing the work. No score, no
-points, no badges, no game of any kind. The value here is the writing, and it should read
-like the athlete had to think. Anything winnable on the couch rewards the opposite of
-what this business sells.
+No score, no points, no badges. The value is the writing.
 
 SAVING (this is the only technical contract)
 Every value that should be saved must be on an element carrying a data-k attribute, for
-example <textarea data-k="film_right"></textarea>. Do not use radio buttons, they save
-incorrectly here. The host app writes saved values back into those elements and then
-fires a single "change" event on the document, so if the page shows anything derived from
-the answers, such as how many boxes are filled, it must recalculate on that event. The
-page must not contain any saving code of its own.
+example <textarea data-k="big_points"></textarea>. Do not use radio buttons. If the page
+shows anything derived from the answers it must recalculate on the document "change" event.
+No saving code of its own.
 
 STYLE
-Dark. Page background #08080C, body text #E8E8EE, cards #131318 with a 1px border of
-rgba(255,255,255,.10) and 12px corners. Brand red #E60C20 for accents, #FF3A41 for small
-red labels, muted text #9C9CA9. System font stack, 15px base, content capped at 430px
-wide and centred. Text boxes must be at least 16px font or the phone zooms in when the
-athlete taps them. Every tap target at least 44px tall.
+(paste the same STYLE block as prompt 1; text boxes at least 16px font so the phone does not
+zoom in)
 
 COPY
-Plain, short sentences in a coach's voice. The prompts should be specific questions, not
-vague ones: "What were they doing to take away your right hand?" beats "How did you
-play?". No em-dashes anywhere. No exclamation marks.
+Specific questions, not vague ones: "What did they serve to on break points?" beats "How did
+you play?". No em-dashes. No exclamation marks.
 ```
 
-### 4. Conditioning ladder
+### 4. Court sprints
 
 ```
-Write me a single self-contained HTML file. It is a basketball conditioning worksheet for
-a youth training app called Geneva Tennis. All CSS and JavaScript inline in that one
-file. No images, no fonts, no libraries, nothing loaded from the internet. It must open
-correctly by double-clicking it in Chrome.
+Write me a single self-contained HTML file. It is a tennis conditioning worksheet for a
+college team app called Geneva Tennis. All CSS and JavaScript inline in that one file. No
+images, no fonts, no libraries, nothing loaded from the internet. It must open correctly by
+double-clicking it in Chrome.
 
 WHAT IT DOES
-A suicide ladder: six runs, each one timed. A big Start and Stop button runs a real
-stopwatch for the current run, and stopping it records that run's time to a tenth of a
-second and moves to the next run. Show every recorded time in a list, the best run, the
-average, and how much the last run dropped off from the first, which is the number that
-actually says whether they are in shape. Include a rest timer between runs counting down
-the prescribed rest. At the bottom, a 1 to 10 box for how hard it felt.
+Six timed sprints, each touching every line of a singles court. A big Start and Stop button
+runs a real stopwatch for the current sprint; stopping records the time to a tenth of a
+second and moves on. Show every time in a list, the best, the average, and how much the
+last sprint dropped off from the first. Include a rest timer between sprints. At the bottom,
+a 1 to 10 box for how hard it felt.
 
 THE HARD RULE
-Nothing in this page may be earnable without actually training. The clock measures real
-seconds of real running. No tapping game, no rhythm bar, no way to post a good time
-sitting down. The athlete can obviously lie to it, the same as any training log, but the
-page must never make faking it into the fun part. Anything winnable on the couch rewards
-the opposite of what this business sells.
+The clock measures real seconds of real running. No tapping game, no way to post a good time
+sitting down.
 
 SAVING (this is the only technical contract)
-Every value that should be saved must be on an element carrying a data-k attribute. Put
-each recorded run time in a hidden input with data-k, for example <input type="hidden"
-data-k="run_1">. Do not use radio buttons, they save incorrectly here. The host app
-writes saved values back into those elements and then fires a single "change" event on
-the document, so the page must listen for "change" on the document and rebuild the times
-list, the best, the average and the drop-off from those inputs, otherwise a returning
-athlete sees an empty sheet even though their times were saved. The page must not contain
-any saving code of its own.
+Put each recorded time in a hidden input with data-k, for example <input type="hidden"
+data-k="sprint_1">. Do not use radio buttons. On the document "change" event the page must
+rebuild the list, the best, the average and the drop-off from those inputs. No saving code.
 
 STYLE
-Dark. Page background #08080C, body text #E8E8EE, cards #131318 with a 1px border of
-rgba(255,255,255,.10) and 12px corners. Brand red #E60C20 for the Start and Stop button,
-#FF3A41 for small red labels, muted text #9C9CA9, highlight yellow #FFD34D for the
-current run. The running clock should be large and readable at arm's length on the floor,
-because the athlete is bent over breathing when they look at it. System font stack,
-content capped at 430px wide and centred. Start and Stop at least 60px tall, everything
-else at least 44px. Every state carries a word, not just a colour, because roughly 8 in
-100 boys are red-green colourblind.
+(paste the same STYLE block as prompt 1; the running clock large enough to read at arm's
+length)
 
 COPY
-Plain, short sentences in a coach's voice. No em-dashes anywhere. No exclamation marks.
+Plain, short sentences in a coach's voice. No em-dashes. No exclamation marks.
 ```
 
 ---
